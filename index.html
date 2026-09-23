@@ -1,0 +1,845 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>점프맵 플랫포머</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100%;
+    height: 100%;
+    background: #0b0e1a;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: "Segoe UI", "Malgun Gothic", sans-serif;
+  }
+  canvas {
+    display: block;
+    border-radius: 8px;
+    box-shadow: 0 0 40px rgba(0, 0, 0, 0.6);
+    image-rendering: auto;
+  }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+
+<script>
+(() => {
+  'use strict';
+
+  // ===================== 기본 설정 =====================
+  const VIEW_W = 960;            // 논리 화면 크기
+  const VIEW_H = 540;
+  const WORLD_W = 3500;          // 월드 크기
+  const WORLD_H = 900;
+  const STEP = 1 / 120;          // 고정 물리 스텝 (초)
+
+  // 물리 상수
+  const GRAVITY = 1900;
+  const MAX_FALL = 1000;
+  const MOVE_SPEED = 280;
+  const GROUND_ACCEL = 2600;
+  const AIR_ACCEL = 1600;
+  const GROUND_FRICTION = 2400;
+  const AIR_FRICTION = 500;
+  const JUMP_VELOCITY = 650;
+  const JUMP_CUT_GRAVITY = 2.3;  // 점프 키를 떼면 더 빨리 떨어짐 (가변 점프 높이)
+  const FALL_GRAVITY = 1.15;
+  const COYOTE_TIME = 0.08;      // 발판에서 막 벗어난 직후 짧은 유예
+  const JUMP_BUFFER = 0.1;       // 착지 직전 누른 점프를 기억
+
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+
+  // ===================== 화면 크기 대응 =====================
+  let renderScale = 1;
+  function resize() {
+    const dpr = window.devicePixelRatio || 1;
+    const scale = Math.min(window.innerWidth / VIEW_W, window.innerHeight / VIEW_H);
+    renderScale = scale * dpr;
+    canvas.width = Math.floor(VIEW_W * renderScale);
+    canvas.height = Math.floor(VIEW_H * renderScale);
+    canvas.style.width = Math.floor(VIEW_W * scale) + 'px';
+    canvas.style.height = Math.floor(VIEW_H * scale) + 'px';
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  // ===================== 레벨 데이터 =====================
+  // solid: 사방이 막힌 블록 / oneway: 위에서만 밟을 수 있는 발판
+  // spikes: 바닥 위에 놓이는 가시 (y = 가시가 놓인 면의 높이) / lava: 용암 영역
+  const G = 820; // 기본 바닥 높이
+
+  const level = {
+    start: { x: 60, y: G - 36 },
+    solids: [
+      // 기본 바닥
+      { x: 0,    y: G,   w: 600,  h: 80 },
+      { x: 740,  y: G,   w: 420,  h: 80 },
+      { x: 1700, y: G,   w: 400,  h: 80 },
+      // 뛰어넘어야 하는 벽 블록
+      { x: 1060, y: G - 60, w: 60, h: 60 },
+      // 상층부 블록 (가운데 가시가 있음)
+      { x: 2680, y: 340, w: 160, h: 24 },
+      // 도착 지점 블록
+      { x: 3240, y: 160, w: 200, h: 24 },
+    ],
+    oneways: [
+      { x: 220,  y: 720, w: 120 },
+      { x: 880,  y: 720, w: 140 },
+      // 용암 바다 위 징검다리 (가운데는 움직이는 발판)
+      { x: 1200, y: 740, w: 100 },
+      { x: 1580, y: 740, w: 100 },
+      // 지그재그 오르막
+      { x: 1820, y: 720, w: 100 },
+      { x: 1960, y: 630, w: 100 },
+      { x: 1800, y: 540, w: 110 },
+      { x: 1960, y: 450, w: 100 },
+      { x: 2130, y: 380, w: 120 },
+      // 상층 루트
+      { x: 2500, y: 320, w: 90 },
+      { x: 3080, y: 200, w: 100 },
+    ],
+    // 움직이는 발판: 기준 위치(bx, by)에서 sin 곡선으로 왕복 (ax: 가로 폭, ay: 세로 폭, period: 왕복 주기[초])
+    // 위에서만 밟을 수 있고, 올라타면 발판과 함께 이동
+    movers: [
+      { bx: 1390, by: 700, w: 100, ax: 70, ay: 0,  period: 3.0, phase: 0 },
+      { bx: 2330, by: 380, w: 90,  ax: 80, ay: 0,  period: 3.2, phase: 1 },
+      { bx: 2900, by: 260, w: 100, ax: 0,  ay: 70, period: 3.5, phase: 0 },
+    ],
+    // 체크포인트: 깃발에 닿으면 활성화, 죽으면 마지막 체크포인트에서 부활 (y = 깃발이 서 있는 면의 높이)
+    checkpoints: [
+      { x: 790,  y: G },
+      { x: 1720, y: G },
+      { x: 2170, y: 380 },
+      { x: 2690, y: 340 },
+    ],
+    spikes: [
+      { x: 380,  y: G,   w: 40 },
+      { x: 900,  y: G,   w: 80 },
+      { x: 1950, y: G,   w: 140 },
+      { x: 2740, y: 340, w: 40 },
+      { x: 2525, y: 320, w: 20 },
+    ],
+    lava: [
+      { x: 600,  y: 850, w: 140,  h: 50 },
+      { x: 1160, y: 850, w: 540,  h: 50 },
+      { x: 2100, y: 850, w: 1400, h: 50 },
+    ],
+    goal: { x: 3330, y: 100, w: 40, h: 60 },
+  };
+
+  const SPIKE_H = 20;
+  // 가시의 실제 판정 박스 (그림보다 조금 작게 해서 억울한 판정 방지)
+  const spikeBoxes = level.spikes.map(s => ({
+    x: s.x + 4, y: s.y - SPIKE_H + 8, w: s.w - 8, h: SPIKE_H - 8,
+  }));
+
+  const CP_H = 56;
+  const checkpointBox = c => ({ x: c.x, y: c.y - CP_H, w: 24, h: CP_H });
+
+  // 움직이는 발판 위치 갱신 (dx, dy = 이번 스텝 이동량 → 탄 플레이어도 같이 이동)
+  function updateMovers() {
+    for (const m of level.movers) {
+      const t = (time * Math.PI * 2) / m.period + m.phase;
+      const nx = m.bx + Math.sin(t) * m.ax;
+      const ny = m.by + Math.sin(t) * m.ay;
+      m.prevY = m.y === undefined ? ny : m.y;
+      m.dx = m.x === undefined ? 0 : nx - m.x;
+      m.dy = ny - m.prevY;
+      m.x = nx;
+      m.y = ny;
+    }
+  }
+
+  // ===================== 입력 처리 =====================
+  const keys = new Set();
+  let jumpPressedAt = -Infinity; // 점프 버퍼용
+
+  const JUMP_KEYS = ['Space', 'ArrowUp', 'KeyW'];
+  const BLOCKED = ['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'];
+
+  window.addEventListener('keydown', e => {
+    if (BLOCKED.includes(e.code)) e.preventDefault();
+    if (JUMP_KEYS.includes(e.code) && !e.repeat) jumpPressedAt = time;
+    if (e.code === 'Enter' && state === 'dead') respawn();          // 마지막 체크포인트에서 부활
+    if (e.code === 'Enter' && state === 'clear') resetGame();       // 클리어 후엔 처음부터
+    if (e.code === 'KeyR' && !e.repeat) resetGame();
+    keys.add(e.code);
+  });
+  window.addEventListener('keyup', e => keys.delete(e.code));
+  window.addEventListener('blur', () => keys.clear());
+
+  const isLeft  = () => keys.has('ArrowLeft') || keys.has('KeyA');
+  const isRight = () => keys.has('ArrowRight') || keys.has('KeyD');
+  const isJumpHeld = () => JUMP_KEYS.some(k => keys.has(k));
+
+  // ===================== 게임 상태 =====================
+  let state = 'playing'; // 'playing' | 'dead' | 'clear'
+  let time = 0;          // 전체 경과 시간 (애니메이션용)
+  let runTime = 0;       // 이번 도전 기록
+  let deaths = 0;
+  let bestTime = null;
+  let particles = [];
+  let stateTimer = 0;
+  let currentCp = null;  // 마지막으로 활성화한 체크포인트
+  let toastText = '';
+  let toastTimer = 0;
+
+  const player = {
+    x: 0, y: 0, w: 28, h: 36,
+    vx: 0, vy: 0,
+    onGround: false,
+    ride: null,          // 현재 올라타 있는 움직이는 발판
+    coyote: 0,
+    facing: 1,
+    squash: 0,
+  };
+
+  const camera = { x: 0, y: 0 };
+
+  // 체크포인트(없으면 시작 지점)에서 다시 시작
+  function respawn() {
+    const sp = currentCp ? { x: currentCp.x, y: currentCp.y - player.h } : level.start;
+    player.x = sp.x;
+    player.y = sp.y;
+    player.vx = 0;
+    player.vy = 0;
+    player.onGround = false;
+    player.ride = null;
+    player.coyote = 0;
+    player.facing = 1;
+    player.squash = 0;
+    jumpPressedAt = -Infinity;
+    particles = [];
+    state = 'playing';
+    stateTimer = 0;
+    snapCamera();
+  }
+
+  // 완전히 처음부터 (기록, 사망 횟수, 체크포인트 초기화)
+  function resetGame() {
+    runTime = 0;
+    deaths = 0;
+    currentCp = null;
+    for (const c of level.checkpoints) c.active = false;
+    toastTimer = 0;
+    respawn();
+  }
+
+  // ===================== 유틸 =====================
+  const overlap = (a, b) =>
+    a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+  const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+
+  function burst(x, y, color, count, speed) {
+    for (let i = 0; i < count; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const s = speed * (0.3 + Math.random() * 0.7);
+      particles.push({
+        x, y,
+        vx: Math.cos(a) * s,
+        vy: Math.sin(a) * s - speed * 0.3,
+        life: 0.6 + Math.random() * 0.6,
+        max: 1.2,
+        size: 3 + Math.random() * 4,
+        color,
+      });
+    }
+  }
+
+  function die() {
+    if (state !== 'playing') return;
+    state = 'dead';
+    stateTimer = 0;
+    deaths++;
+    burst(player.x + player.w / 2, player.y + player.h / 2, '#ffcc4d', 40, 420);
+  }
+
+  function clearGame() {
+    if (state !== 'playing') return;
+    state = 'clear';
+    stateTimer = 0;
+    if (bestTime === null || runTime < bestTime) bestTime = runTime;
+    burst(level.goal.x + level.goal.w / 2, level.goal.y + 10, '#5dff8f', 60, 380);
+  }
+
+  // ===================== 물리 업데이트 =====================
+  function updatePlayer(dt) {
+    const p = player;
+    const dir = (isRight() ? 1 : 0) - (isLeft() ? 1 : 0);
+
+    // --- 움직이는 발판에 타 있으면 발판 이동량만큼 같이 이동 ---
+    if (p.ride) {
+      p.x += p.ride.dx;
+      p.y += p.ride.dy;
+    }
+
+    // --- 수평 가속 / 마찰 ---
+    if (dir !== 0) {
+      const accel = p.onGround ? GROUND_ACCEL : AIR_ACCEL;
+      // 반대 방향으로 전환할 때는 더 빠르게 멈추도록
+      const turnBoost = Math.sign(p.vx) === -dir ? 1.8 : 1;
+      p.vx += dir * accel * turnBoost * dt;
+      p.vx = clamp(p.vx, -MOVE_SPEED, MOVE_SPEED);
+      p.facing = dir;
+    } else {
+      const fric = (p.onGround ? GROUND_FRICTION : AIR_FRICTION) * dt;
+      if (Math.abs(p.vx) <= fric) p.vx = 0;
+      else p.vx -= Math.sign(p.vx) * fric;
+    }
+
+    // --- 점프 (바닥에 닿아 있을 때만) ---
+    if (p.onGround) p.coyote = COYOTE_TIME;
+    else p.coyote -= dt;
+
+    const buffered = time - jumpPressedAt <= JUMP_BUFFER;
+    if (buffered && p.coyote > 0) {
+      p.vy = -JUMP_VELOCITY;
+      p.onGround = false;
+      p.coyote = 0;
+      jumpPressedAt = -Infinity;
+      p.squash = -0.25;
+    }
+
+    // --- 중력 ---
+    let gMul = 1;
+    if (p.vy < 0 && !isJumpHeld()) gMul = JUMP_CUT_GRAVITY;
+    else if (p.vy > 0) gMul = FALL_GRAVITY;
+    p.vy = Math.min(p.vy + GRAVITY * gMul * dt, MAX_FALL);
+
+    // --- X축 이동 및 충돌 ---
+    p.x += p.vx * dt;
+    for (const s of level.solids) {
+      if (overlap(p, s)) {
+        if (p.vx > 0) p.x = s.x - p.w;
+        else if (p.vx < 0) p.x = s.x + s.w;
+        else {
+          // 속도 0인데 겹친 경우: 가까운 쪽으로 밀어냄
+          const leftPush = p.x + p.w - s.x;
+          const rightPush = s.x + s.w - p.x;
+          p.x += leftPush < rightPush ? -leftPush : rightPush;
+        }
+        p.vx = 0;
+      }
+    }
+    if (p.x < 0) { p.x = 0; p.vx = 0; }
+    if (p.x + p.w > WORLD_W) { p.x = WORLD_W - p.w; p.vx = 0; }
+
+    // --- Y축 이동 및 충돌 ---
+    const prevBottom = p.y + p.h;
+    const wasOnGround = p.onGround;
+    const landingSpeed = p.vy;
+    p.y += p.vy * dt;
+    p.onGround = false;
+    p.ride = null;
+
+    for (const s of level.solids) {
+      if (overlap(p, s)) {
+        if (p.vy > 0) {
+          p.y = s.y - p.h;
+          p.onGround = true;
+        } else if (p.vy < 0) {
+          p.y = s.y + s.h; // 머리 박음
+        }
+        p.vy = 0;
+      }
+    }
+
+    // 원웨이 발판: 아래로 떨어지는 중이고, 이전 프레임에 발판 위에 있었을 때만 착지
+    if (p.vy >= 0) {
+      for (const o of level.oneways) {
+        const horizontal = p.x + p.w > o.x && p.x < o.x + o.w;
+        if (horizontal && prevBottom <= o.y + 0.5 && p.y + p.h >= o.y) {
+          p.y = o.y - p.h;
+          p.vy = 0;
+          p.onGround = true;
+        }
+      }
+      // 움직이는 발판도 원웨이 방식 (발판이 위로 올라오는 경우를 위해 이전/현재 높이 중 낮은 쪽 기준)
+      for (const m of level.movers) {
+        const horizontal = p.x + p.w > m.x && p.x < m.x + m.w;
+        const top = Math.max(m.y, m.prevY);
+        if (horizontal && prevBottom <= top + 1 && p.y + p.h >= m.y) {
+          p.y = m.y - p.h;
+          p.vy = 0;
+          p.onGround = true;
+          p.ride = m;
+        }
+      }
+    }
+
+    if (p.onGround && !wasOnGround && landingSpeed > 300) {
+      p.squash = Math.min(0.3, landingSpeed / 3000);
+    }
+    p.squash *= Math.pow(0.001, dt); // 찌그러짐 복원
+
+    // --- 위험 요소 판정 ---
+    for (const l of level.lava) if (overlap(p, l)) return die();
+    for (const s of spikeBoxes) if (overlap(p, s)) return die();
+    if (p.y > WORLD_H + 60) return die();
+
+    // --- 체크포인트 판정 ---
+    for (const c of level.checkpoints) {
+      if (!c.active && overlap(p, checkpointBox(c))) {
+        c.active = true;
+        currentCp = c;
+        toastText = 'CHECKPOINT!';
+        toastTimer = 1.6;
+        burst(c.x + 12, c.y - CP_H + 10, '#ffe066', 24, 260);
+      }
+    }
+
+    // --- 도착 판정 ---
+    if (overlap(p, level.goal)) clearGame();
+  }
+
+  function updateParticles(dt) {
+    for (const pt of particles) {
+      pt.vy += 900 * dt;
+      pt.x += pt.vx * dt;
+      pt.y += pt.vy * dt;
+      pt.life -= dt;
+    }
+    particles = particles.filter(pt => pt.life > 0);
+  }
+
+  function cameraTarget() {
+    return {
+      x: clamp(player.x + player.w / 2 - VIEW_W / 2 + player.facing * 60, 0, WORLD_W - VIEW_W),
+      y: clamp(player.y + player.h / 2 - VIEW_H / 2 - 40, 0, WORLD_H - VIEW_H),
+    };
+  }
+  function snapCamera() {
+    const t = cameraTarget();
+    camera.x = t.x;
+    camera.y = t.y;
+  }
+  function updateCamera(dt) {
+    if (state === 'dead') return; // 죽은 자리에 카메라 고정
+    const t = cameraTarget();
+    const k = 1 - Math.pow(0.0005, dt);
+    camera.x += (t.x - camera.x) * k;
+    camera.y += (t.y - camera.y) * k;
+  }
+
+  function update(dt) {
+    time += dt;
+    stateTimer += dt;
+    toastTimer = Math.max(0, toastTimer - dt);
+    updateMovers();
+    if (state === 'playing') {
+      runTime += dt;
+      updatePlayer(dt);
+    }
+    updateParticles(dt);
+    updateCamera(dt);
+  }
+
+  // ===================== 렌더링 =====================
+  function drawBackground() {
+    const sky = ctx.createLinearGradient(0, 0, 0, VIEW_H);
+    sky.addColorStop(0, '#1a1f4a');
+    sky.addColorStop(0.6, '#3b3470');
+    sky.addColorStop(1, '#6a3f6e');
+    ctx.fillStyle = sky;
+    ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+
+    // 별
+    ctx.fillStyle = 'rgba(255,255,255,0.7)';
+    for (let i = 0; i < 70; i++) {
+      const sx = ((i * 137.5 - camera.x * 0.05) % VIEW_W + VIEW_W) % VIEW_W;
+      const sy = (i * 71.3) % (VIEW_H * 0.6);
+      const tw = 0.5 + 0.5 * Math.sin(time * 2 + i);
+      ctx.globalAlpha = 0.3 + tw * 0.6;
+      ctx.fillRect(sx, sy, 2, 2);
+    }
+    ctx.globalAlpha = 1;
+
+    // 원경 산 (패럴랙스)
+    drawHills(0.15, 330, 110, '#2a2656', 420);
+    drawHills(0.35, 400, 80, '#231f47', 260);
+  }
+
+  function drawHills(factor, baseY, amp, color, period) {
+    const offX = camera.x * factor;
+    const offY = camera.y * factor * 0.5;
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.moveTo(0, VIEW_H);
+    for (let x = 0; x <= VIEW_W; x += 16) {
+      const wx = x + offX;
+      const y = baseY - offY + 40 - Math.abs(Math.sin(wx / period)) * amp - Math.sin(wx / (period * 0.37)) * amp * 0.2;
+      ctx.lineTo(x, y);
+    }
+    ctx.lineTo(VIEW_W, VIEW_H);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  function drawSolids() {
+    for (const s of level.solids) {
+      ctx.fillStyle = '#5a4636';
+      ctx.fillRect(s.x, s.y, s.w, s.h);
+      // 잔디 윗면
+      ctx.fillStyle = '#58c26a';
+      ctx.fillRect(s.x, s.y, s.w, 8);
+      ctx.fillStyle = '#3f9a52';
+      ctx.fillRect(s.x, s.y + 8, s.w, 3);
+      // 흙 무늬
+      ctx.fillStyle = 'rgba(0,0,0,0.15)';
+      for (let x = s.x + 10; x < s.x + s.w - 6; x += 28) {
+        for (let y = s.y + 22; y < s.y + s.h - 4; y += 22) {
+          ctx.fillRect(x + ((y / 22) % 2) * 12, y, 6, 4);
+        }
+      }
+      ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(s.x + 1, s.y + 1, s.w - 2, s.h - 2);
+    }
+  }
+
+  function drawOneways() {
+    for (const o of level.oneways) {
+      ctx.fillStyle = '#c99a5b';
+      ctx.fillRect(o.x, o.y, o.w, 12);
+      ctx.fillStyle = '#e6bb7a';
+      ctx.fillRect(o.x, o.y, o.w, 4);
+      ctx.fillStyle = '#8a6333';
+      for (let x = o.x + 6; x < o.x + o.w - 4; x += 24) ctx.fillRect(x, o.y + 5, 3, 7);
+      ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(o.x + 1, o.y + 1, o.w - 2, 11);
+    }
+  }
+
+  function drawMovers() {
+    for (const m of level.movers) {
+      // 이동 경로 레일
+      ctx.strokeStyle = 'rgba(180, 200, 255, 0.25)';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([6, 6]);
+      ctx.beginPath();
+      ctx.moveTo(m.bx - m.ax + m.w / 2, m.by - m.ay + 6);
+      ctx.lineTo(m.bx + m.ax + m.w / 2, m.by + m.ay + 6);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // 발판 본체 (금속 느낌)
+      ctx.fillStyle = '#6c7bd9';
+      ctx.fillRect(m.x, m.y, m.w, 12);
+      ctx.fillStyle = '#a9b4ff';
+      ctx.fillRect(m.x, m.y, m.w, 4);
+      ctx.fillStyle = '#ffe066';
+      for (let x = m.x + 8; x < m.x + m.w - 6; x += 18) ctx.fillRect(x, m.y + 6, 6, 3);
+      ctx.strokeStyle = 'rgba(0,0,0,0.4)';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(m.x + 1, m.y + 1, m.w - 2, 11);
+    }
+  }
+
+  function drawCheckpoints() {
+    for (const c of level.checkpoints) {
+      const poleX = c.x + 10;
+      const top = c.y - CP_H;
+      if (c.active) {
+        const glow = ctx.createRadialGradient(poleX, top + 12, 2, poleX, top + 12, 40);
+        glow.addColorStop(0, 'rgba(255, 224, 102, 0.45)');
+        glow.addColorStop(1, 'rgba(255, 224, 102, 0)');
+        ctx.fillStyle = glow;
+        ctx.fillRect(poleX - 40, top - 28, 80, 80);
+      }
+      // 받침돌
+      ctx.fillStyle = '#6b6f80';
+      ctx.fillRect(c.x + 2, c.y - 6, 20, 6);
+      // 깃대
+      ctx.fillStyle = '#d8d8e0';
+      ctx.fillRect(poleX, top, 4, CP_H - 6);
+      // 깃발 (비활성: 회색 / 활성: 노란색으로 펄럭임)
+      const wave = c.active ? Math.sin(time * 7) * 3 : 0;
+      ctx.fillStyle = c.active ? '#ffe066' : '#8a8fa3';
+      ctx.beginPath();
+      ctx.moveTo(poleX + 4, top);
+      ctx.quadraticCurveTo(poleX + 16, top + 5 + wave, poleX + 28, top + 9);
+      ctx.quadraticCurveTo(poleX + 16, top + 14 - wave, poleX + 4, top + 20);
+      ctx.closePath();
+      ctx.fill();
+    }
+  }
+
+  function drawSpikes() {
+    for (const s of level.spikes) {
+      const n = Math.max(1, Math.round(s.w / 20));
+      const tw = s.w / n;
+      for (let i = 0; i < n; i++) {
+        const x0 = s.x + i * tw;
+        ctx.beginPath();
+        ctx.moveTo(x0, s.y);
+        ctx.lineTo(x0 + tw / 2, s.y - SPIKE_H);
+        ctx.lineTo(x0 + tw, s.y);
+        ctx.closePath();
+        ctx.fillStyle = '#e03a3a';
+        ctx.fill();
+        ctx.strokeStyle = '#7a1414';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        // 하이라이트
+        ctx.beginPath();
+        ctx.moveTo(x0 + tw / 2, s.y - SPIKE_H + 3);
+        ctx.lineTo(x0 + tw * 0.35, s.y - 3);
+        ctx.strokeStyle = 'rgba(255,200,200,0.6)';
+        ctx.stroke();
+      }
+    }
+  }
+
+  function drawLava() {
+    for (const l of level.lava) {
+      const grad = ctx.createLinearGradient(0, l.y, 0, l.y + l.h);
+      grad.addColorStop(0, '#ff6a1f');
+      grad.addColorStop(1, '#b3160c');
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.moveTo(l.x, l.y + l.h);
+      for (let x = l.x; x <= l.x + l.w; x += 8) {
+        const y = l.y + Math.sin(x / 22 + time * 3) * 3 + Math.sin(x / 9 - time * 5) * 1.5;
+        ctx.lineTo(x, y);
+      }
+      ctx.lineTo(l.x + l.w, l.y + l.h + 60);
+      ctx.lineTo(l.x, l.y + l.h + 60);
+      ctx.closePath();
+      ctx.fill();
+      // 빛나는 표면
+      ctx.fillStyle = 'rgba(255, 220, 90, 0.5)';
+      for (let x = l.x + 10; x < l.x + l.w - 10; x += 37) {
+        const bob = Math.sin(time * 2 + x) * 3;
+        ctx.fillRect(x, l.y + 8 + bob, 10, 3);
+      }
+    }
+  }
+
+  function drawGoal() {
+    const g = level.goal;
+    const pulse = 0.5 + 0.5 * Math.sin(time * 4);
+    // 빛 기둥
+    const glow = ctx.createRadialGradient(g.x + g.w / 2, g.y + g.h / 2, 5, g.x + g.w / 2, g.y + g.h / 2, 90);
+    glow.addColorStop(0, `rgba(93, 255, 143, ${0.35 + pulse * 0.2})`);
+    glow.addColorStop(1, 'rgba(93, 255, 143, 0)');
+    ctx.fillStyle = glow;
+    ctx.fillRect(g.x - 90, g.y - 90, g.w + 180, g.h + 180);
+
+    // 포털 본체
+    ctx.fillStyle = '#2ecc71';
+    ctx.fillRect(g.x, g.y, g.w, g.h);
+    ctx.fillStyle = '#a8ffc4';
+    ctx.fillRect(g.x + 6, g.y + 6, g.w - 12, g.h - 12);
+    ctx.fillStyle = `rgba(46, 204, 113, ${0.4 + pulse * 0.4})`;
+    ctx.fillRect(g.x + 10, g.y + 10, g.w - 20, g.h - 20);
+
+    // 깃발
+    ctx.fillStyle = '#ddd';
+    ctx.fillRect(g.x + g.w + 14, g.y - 50, 4, g.h + 50);
+    const wave = Math.sin(time * 6) * 4;
+    ctx.fillStyle = '#5dff8f';
+    ctx.beginPath();
+    ctx.moveTo(g.x + g.w + 18, g.y - 50);
+    ctx.quadraticCurveTo(g.x + g.w + 40, g.y - 44 + wave, g.x + g.w + 58, g.y - 38);
+    ctx.quadraticCurveTo(g.x + g.w + 40, g.y - 30 - wave, g.x + g.w + 18, g.y - 26);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.fillStyle = '#eafff0';
+    ctx.font = 'bold 14px "Segoe UI", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('GOAL', g.x + g.w / 2, g.y - 10);
+  }
+
+  function drawPlayer() {
+    if (state === 'dead') return;
+    const p = player;
+    const sq = p.squash;
+    const w = p.w * (1 + sq);
+    const h = p.h * (1 - sq);
+    const x = p.x + (p.w - w) / 2;
+    const y = p.y + (p.h - h);
+
+    // 그림자 느낌의 외곽
+    ctx.fillStyle = '#1b2a5c';
+    roundRect(x - 2, y - 2, w + 4, h + 4, 8);
+    ctx.fill();
+    ctx.fillStyle = '#4fa3ff';
+    roundRect(x, y, w, h, 6);
+    ctx.fill();
+    ctx.fillStyle = '#8cc6ff';
+    roundRect(x + 3, y + 3, w - 6, 8, 4);
+    ctx.fill();
+
+    // 눈
+    const eyeY = y + h * 0.35;
+    const lookX = p.facing * 3;
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(x + w * 0.25 + lookX - 3, eyeY, 7, 9);
+    ctx.fillRect(x + w * 0.62 + lookX - 3, eyeY, 7, 9);
+    ctx.fillStyle = '#10163a';
+    ctx.fillRect(x + w * 0.25 + lookX + p.facing * 1.5 - 1, eyeY + 2, 4, 6);
+    ctx.fillRect(x + w * 0.62 + lookX + p.facing * 1.5 - 1, eyeY + 2, 4, 6);
+  }
+
+  function roundRect(x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + w - r, y);
+    ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+    ctx.lineTo(x + w, y + h - r);
+    ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+    ctx.lineTo(x + r, y + h);
+    ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+    ctx.lineTo(x, y + r);
+    ctx.quadraticCurveTo(x, y, x + r, y);
+    ctx.closePath();
+  }
+
+  function drawParticles() {
+    for (const pt of particles) {
+      ctx.globalAlpha = Math.max(0, pt.life / pt.max);
+      ctx.fillStyle = pt.color;
+      ctx.fillRect(pt.x - pt.size / 2, pt.y - pt.size / 2, pt.size, pt.size);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  function formatTime(t) {
+    const m = Math.floor(t / 60);
+    const s = (t % 60).toFixed(2).padStart(5, '0');
+    return `${m}:${s}`;
+  }
+
+  function drawHUD() {
+    ctx.textAlign = 'left';
+    ctx.fillStyle = 'rgba(0,0,0,0.35)';
+    roundRect(12, 12, 250, 62, 8);
+    ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 18px "Segoe UI", sans-serif';
+    ctx.fillText(`⏱ ${formatTime(runTime)}`, 24, 38);
+    ctx.fillText(`☠ ${deaths}`, 150, 38);
+    ctx.font = '13px "Segoe UI", "Malgun Gothic", sans-serif';
+    ctx.fillStyle = 'rgba(255,255,255,0.75)';
+    ctx.fillText(bestTime !== null ? `최고 기록 ${formatTime(bestTime)}` : '최고 기록 --:--', 24, 62);
+
+    // 진행도 바
+    const prog = clamp(player.x / (level.goal.x), 0, 1);
+    ctx.fillStyle = 'rgba(0,0,0,0.35)';
+    roundRect(VIEW_W - 232, 16, 216, 14, 7);
+    ctx.fill();
+    ctx.fillStyle = '#5dff8f';
+    roundRect(VIEW_W - 230, 18, Math.max(10, 212 * prog), 10, 5);
+    ctx.fill();
+
+    // 체크포인트 알림
+    if (toastTimer > 0) {
+      ctx.globalAlpha = Math.min(1, toastTimer / 0.4);
+      ctx.textAlign = 'center';
+      ctx.font = 'bold 28px "Segoe UI", sans-serif';
+      ctx.fillStyle = '#7a5a00';
+      ctx.fillText(toastText, VIEW_W / 2 + 2, 92);
+      ctx.fillStyle = '#ffe066';
+      ctx.fillText(toastText, VIEW_W / 2, 90);
+      ctx.globalAlpha = 1;
+    }
+
+    // 조작법 (처음 몇 초간)
+    if (state === 'playing' && runTime < 6) {
+      ctx.globalAlpha = Math.min(1, (6 - runTime) / 1.5);
+      ctx.textAlign = 'center';
+      ctx.font = '16px "Segoe UI", "Malgun Gothic", sans-serif';
+      ctx.fillStyle = 'rgba(0,0,0,0.45)';
+      roundRect(VIEW_W / 2 - 250, VIEW_H - 58, 500, 36, 8);
+      ctx.fill();
+      ctx.fillStyle = '#fff';
+      ctx.fillText('← → / A D : 이동    Space / ↑ / W : 점프    R : 처음부터', VIEW_W / 2, VIEW_H - 34);
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  function drawOverlay() {
+    if (state === 'playing') return;
+    const a = Math.min(1, stateTimer / 0.4);
+    ctx.fillStyle = `rgba(5, 6, 15, ${0.6 * a})`;
+    ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+    ctx.globalAlpha = a;
+    ctx.textAlign = 'center';
+
+    const bounce = Math.sin(time * 3) * 4;
+    if (state === 'dead') {
+      ctx.font = 'bold 72px "Segoe UI", sans-serif';
+      ctx.fillStyle = '#7a1414';
+      ctx.fillText('GAME OVER', VIEW_W / 2 + 4, VIEW_H / 2 - 16 + 4 + bounce);
+      ctx.fillStyle = '#ff4d4d';
+      ctx.fillText('GAME OVER', VIEW_W / 2, VIEW_H / 2 - 16 + bounce);
+    } else {
+      ctx.font = 'bold 72px "Segoe UI", sans-serif';
+      ctx.fillStyle = '#146b35';
+      ctx.fillText('STAGE CLEAR!', VIEW_W / 2 + 4, VIEW_H / 2 - 30 + 4 + bounce);
+      ctx.fillStyle = '#5dff8f';
+      ctx.fillText('STAGE CLEAR!', VIEW_W / 2, VIEW_H / 2 - 30 + bounce);
+      ctx.font = '22px "Segoe UI", "Malgun Gothic", sans-serif';
+      ctx.fillStyle = '#fff';
+      ctx.fillText(`기록 ${formatTime(runTime)}   ·   사망 ${deaths}회`, VIEW_W / 2, VIEW_H / 2 + 14);
+    }
+
+    ctx.font = '20px "Segoe UI", "Malgun Gothic", sans-serif';
+    ctx.fillStyle = `rgba(255,255,255,${0.55 + 0.45 * Math.sin(time * 4)})`;
+    let msg = 'Enter 키를 눌러 다시 시작';
+    if (state === 'dead' && currentCp) msg = 'Enter: 체크포인트에서 다시 시작   ·   R: 처음부터';
+    ctx.fillText(msg, VIEW_W / 2, VIEW_H / 2 + 60);
+    ctx.globalAlpha = 1;
+  }
+
+  function render() {
+    ctx.setTransform(renderScale, 0, 0, renderScale, 0, 0);
+    drawBackground();
+
+    ctx.save();
+    ctx.translate(-Math.round(camera.x), -Math.round(camera.y));
+    drawLava();
+    drawSolids();
+    drawOneways();
+    drawMovers();
+    drawCheckpoints();
+    drawSpikes();
+    drawGoal();
+    drawPlayer();
+    drawParticles();
+    ctx.restore();
+
+    drawHUD();
+    drawOverlay();
+  }
+
+  // ===================== 메인 루프 =====================
+  let last = performance.now();
+  let acc = 0;
+  function loop(now) {
+    const frame = Math.min(0.1, (now - last) / 1000); // 탭 전환 등으로 인한 큰 dt 방지
+    last = now;
+    acc += frame;
+    while (acc >= STEP) {
+      update(STEP);
+      acc -= STEP;
+    }
+    render();
+    requestAnimationFrame(loop);
+  }
+
+  updateMovers();
+  resetGame();
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
