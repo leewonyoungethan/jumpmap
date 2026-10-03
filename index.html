@@ -231,7 +231,13 @@ if ('serviceWorker' in navigator && location.protocol !== 'file:') {
   const CRUMBLE_RESTORE = 3.0;   // 부서진 뒤 복구되기까지
 
   const canvas = document.getElementById('game');
-  const ctx = canvas.getContext('2d');
+  let ctx = canvas.getContext('2d');   // 배경을 따로 그릴 때 잠깐 바꿔 끼움
+  const mainCtx = ctx;
+  // 아지랑이 왜곡용 배경 버퍼, 제한 시야용 어둠 버퍼
+  const bgCanvas = document.createElement('canvas');
+  const bgCtx = bgCanvas.getContext('2d');
+  const maskCanvas = document.createElement('canvas');
+  const maskCtx = maskCanvas.getContext('2d');
 
   // ===================== 화면 크기 대응 =====================
   let renderScale = 1;
@@ -373,6 +379,7 @@ if ('serviceWorker' in navigator && location.protocol !== 'file:') {
     {
       name: '나락의 심장',
       worldW: 1600, worldH: 1800,
+      dark: true,          // 제한 시야: 캐릭터 주변과 스스로 빛나는 것만 보임
       sky: ['#140306', '#340a14', '#5e161c', '#9a3a1c'],
       make: () => ({
         start: { x: 60, y: 1700 - 36 },
@@ -492,6 +499,25 @@ if ('serviceWorker' in navigator && location.protocol !== 'file:') {
     for (const c of level.crumbles) {
       c.state = 'idle';
       c.timer = 0;
+      c.dustT = (c.x * 0.37) % 4;   // 발판마다 먼지 떨어지는 때를 엇갈리게
+    }
+  }
+
+  // 가만히 있는 함정 발판에서 4초마다 금 사이로 돌가루가 흘러내림 (밟기 전 경고)
+  function crumbleDust(dt) {
+    for (const c of level.crumbles) {
+      if (c.state !== 'idle') continue;
+      c.dustT = (c.dustT || 0) + dt;
+      if (c.dustT < 4) continue;
+      c.dustT = 0;
+      for (let i = 0; i < 3; i++) {
+        particles.push({
+          x: c.x + c.w * (0.25 + 0.25 * i), y: c.y + 13,
+          vx: (Math.random() - 0.5) * 10, vy: 10 + Math.random() * 20,
+          life: 0.7, max: 0.7, size: 2 + Math.random() * 1.5,
+          color: 'rgba(190, 180, 170, 0.8)',
+        });
+      }
     }
   }
 
@@ -753,6 +779,8 @@ if ('serviceWorker' in navigator && location.protocol !== 'file:') {
   let flashTimer = 0;    // 낙하 구조 시 화면 번쩍임
   let shakeTimer = 0;    // 화면 흔들림
   let trail = [];        // 빠르게 움직일 때 플레이어 잔상
+  let beatPhase = 0;     // 무너지는 발판 위 심장 박동 (0~1 반복)
+  let beatLevel = 0;     // 박동 세기 (발판이 붉을수록 강함)
 
   // 배경 연출용 데이터 (인덱스로 생성해서 매번 같은 모양)
   const bgRuins = Array.from({ length: 40 }, (_, i) => ({
@@ -967,6 +995,7 @@ if ('serviceWorker' in navigator && location.protocol !== 'file:') {
     p.y += p.vy * dt;
     p.onGround = false;
     p.ride = null;
+    p.standing = null;   // 지금 밟고 있는 함정 발판
 
     for (const s of level.solids) {
       if (overlap(p, s)) {
@@ -1009,6 +1038,7 @@ if ('serviceWorker' in navigator && location.protocol !== 'file:') {
           p.y = c.y - p.h;
           p.vy = 0;
           p.onGround = true;
+          p.standing = c;
           if (c.state === 'idle') {
             c.state = 'shaking';
             c.timer = 0;
@@ -1097,6 +1127,16 @@ if ('serviceWorker' in navigator && location.protocol !== 'file:') {
     }
     updateMovers();
     updateCrumbles(dt);
+    crumbleDust(dt);
+    // 붕괴 중인 발판 위에 서 있으면 심장 박동이 빨라짐 (0.5초 간격 → 약 0.17초 간격)
+    const sc = state === 'playing' && player.standing && player.standing.state === 'shaking' ? player.standing : null;
+    if (sc) {
+      const t = Math.min(1, sc.timer / CRUMBLE_DELAY);
+      beatPhase += dt * (2 + 4 * t);
+      beatLevel = 0.5 + 0.5 * t;
+    } else {
+      beatLevel = Math.max(0, beatLevel - dt * 2);
+    }
     if (state === 'playing') {
       runTime += dt;
       updatePlayer(dt);
@@ -1158,6 +1198,14 @@ if ('serviceWorker' in navigator && location.protocol !== 'file:') {
     // 원경 산 → 무너진 기둥 폐허 → 근경 언덕 (패럴랙스)
     drawHills(0.1, 330, 110, '#2a1f52', 420);
     drawRuins(0.22, '#20173f');
+    // 중경에서 가끔 떨어지는 돌 조각 (바닥에 닿는 모습은 보여주지 않음)
+    ctx.fillStyle = '#3a2d63';
+    for (let i = 0; i < 10; i++) {
+      const fx = ((i * 233 - camera.x * 0.22) % VIEW_W + VIEW_W) % VIEW_W;
+      const fy = ((time * (50 + (i % 3) * 25) + i * 97) % (VIEW_H + 60)) - 30;
+      const sz = 2 + (i % 3);
+      ctx.fillRect(fx, fy, sz, sz);
+    }
     drawHills(0.35, 410, 80, '#170f30', 260);
 
     // 지평선 안개
@@ -1208,6 +1256,140 @@ if ('serviceWorker' in navigator && location.protocol !== 'file:') {
     ctx.globalCompositeOperation = 'source-over';
   }
 
+  // 붉은 아지랑이: 화면 아래 1/3에서 위로 피어오르는 열기 (배경 왜곡은 render에서)
+  function drawHaze() {
+    const strong = STAGES[stageIndex].dark ? 1.4 : 1;
+    const base = ctx.createLinearGradient(0, VIEW_H * 0.6, 0, VIEW_H);
+    base.addColorStop(0, 'rgba(122, 46, 69, 0)');
+    base.addColorStop(1, `rgba(160, 50, 60, ${0.16 * strong})`);
+    ctx.fillStyle = base;
+    ctx.fillRect(0, VIEW_H * 0.6, VIEW_W, VIEW_H * 0.4);
+    ctx.globalCompositeOperation = 'lighter';
+    for (let i = 0; i < 9; i++) {
+      const life = ((time * 0.25 + i * 0.37) % 1);          // 0 → 1 동안 위로 올라가며 사라짐
+      const wx = ((i * 157 - camera.x * 0.8) % VIEW_W + VIEW_W) % VIEW_W + Math.sin(time * 1.3 + i) * 14;
+      const wy = VIEW_H + 20 - life * VIEW_H * 0.45;
+      const a = Math.sin(life * Math.PI) * 0.1 * strong;
+      const g = ctx.createRadialGradient(wx, wy, 2, wx, wy, 46);
+      g.addColorStop(0, `rgba(255, 80, 60, ${a})`);
+      g.addColorStop(1, 'rgba(255, 80, 60, 0)');
+      ctx.fillStyle = g;
+      ctx.save();
+      ctx.translate(wx, wy);
+      ctx.scale(0.45, 1.6);                                   // 세로로 길쭉한 열기 줄기
+      ctx.translate(-wx, -wy);
+      ctx.fillRect(wx - 46, wy - 46, 92, 92);
+      ctx.restore();
+    }
+    ctx.globalCompositeOperation = 'source-over';
+  }
+
+  // 전경: 화면 위에서 늘어진 쇠사슬 (스크롤 계수 1.25, 플레이보다 빠름)
+  function drawForeground() {
+    const span = 620;
+    ctx.strokeStyle = 'rgba(8, 4, 26, 0.85)';
+    ctx.lineWidth = 3;
+    for (let k = -1; k < VIEW_W / span + 1; k++) {
+      const base = Math.floor(camera.x * 1.25 / span) + k;
+      const ax = base * span - camera.x * 1.25 + 180 + ((base * 97) % 200);
+      const len = 50 + ((base * 53) % 70);
+      const sway = Math.sin(time * 0.9 + base) * 4;
+      for (let y = -6, i = 0; y < len; y += 9, i++) {
+        const lx = ax + sway * (y / len);
+        ctx.beginPath();
+        if (i % 2) ctx.ellipse(lx, y, 2, 5, 0, 0, Math.PI * 2);
+        else ctx.ellipse(lx, y, 4, 5, 0, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    }
+  }
+
+  // 붕괴 중인 발판 위: 화면 가장자리가 박동에 맞춰 붉게 수축
+  function drawHeartbeat() {
+    if (beatLevel <= 0) return;
+    const ph = beatPhase % 1;
+    const pulse = Math.max(0, 1 - ph * 5) + 0.6 * Math.max(0, 1 - Math.abs(ph - 0.28) * 7);   // 쿵-쿵
+    if (pulse <= 0) return;
+    const v = ctx.createRadialGradient(VIEW_W / 2, VIEW_H / 2, VIEW_W * (0.32 - pulse * 0.04), VIEW_W / 2, VIEW_H / 2, VIEW_W * 0.68);
+    v.addColorStop(0, 'rgba(200, 20, 30, 0)');
+    v.addColorStop(1, `rgba(200, 20, 30, ${0.45 * pulse * beatLevel})`);
+    ctx.fillStyle = v;
+    ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+  }
+
+  // 나락으로 떨어질 때: 세로 속도선 + 화면 아래가 어두워짐
+  function drawFallFx() {
+    if (state !== 'playing') return;
+    const p = player;
+    if (p.vy > 750) {
+      const a = Math.min(1, (p.vy - 750) / 250) * 0.5;
+      ctx.strokeStyle = `rgba(230, 220, 255, ${a})`;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      for (let i = 0; i < 5; i++) {
+        const lx = p.x - 22 + i * 18 + ((i * 7) % 5);
+        const ly = p.y - 30 - ((time * 900 + i * 40) % 60);
+        ctx.moveTo(lx, ly);
+        ctx.lineTo(lx, ly - 28 - (i % 3) * 10);
+      }
+      ctx.stroke();
+    }
+  }
+  function drawFallDarkness() {
+    if (state !== 'playing') return;
+    const p = player;
+    const overAbyss = level.abyss.some(a => p.x + p.w > a.x && p.x < a.x + a.w);
+    const depth = (p.y - (WORLD_H - 300)) / 300;
+    if (!overAbyss || depth <= 0) return;
+    const g = ctx.createLinearGradient(0, VIEW_H * 0.35, 0, VIEW_H);
+    g.addColorStop(0, 'rgba(8, 4, 26, 0)');
+    g.addColorStop(1, `rgba(8, 4, 26, ${Math.min(1, depth) * 0.75})`);
+    ctx.fillStyle = g;
+    ctx.fillRect(0, VIEW_H * 0.35, VIEW_W, VIEW_H * 0.65);
+  }
+
+  // 제한 시야: 캐릭터 주변(반지름 180)과 스스로 빛나는 것만 어둠을 뚫고 보임
+  function drawDarkness() {
+    const W = canvas.width, H = canvas.height;
+    if (maskCanvas.width !== W || maskCanvas.height !== H) { maskCanvas.width = W; maskCanvas.height = H; }
+    const m = maskCtx;
+    m.setTransform(1, 0, 0, 1, 0, 0);
+    m.globalCompositeOperation = 'source-over';
+    m.clearRect(0, 0, W, H);
+    m.setTransform(renderScale, 0, 0, renderScale, 0, 0);
+    m.fillStyle = 'rgba(8, 4, 26, 0.93)';
+    m.fillRect(0, 0, VIEW_W, VIEW_H);
+    m.globalCompositeOperation = 'destination-out';
+    const hole = (wx, wy, r) => {
+      const x = wx - camera.x, y = wy - camera.y;
+      if (x < -r || x > VIEW_W + r || y < -r || y > VIEW_H + r) return;
+      const g = m.createRadialGradient(x, y, r * 0.5, x, y, r);
+      g.addColorStop(0, 'rgba(0,0,0,1)');
+      g.addColorStop(1, 'rgba(0,0,0,0)');
+      m.fillStyle = g;
+      m.fillRect(x - r, y - r, r * 2, r * 2);
+    };
+    const flicker = 1 + Math.sin(time * 7) * 0.02 + Math.sin(time * 13) * 0.015;
+    if (state !== 'dead') hole(player.x + player.w / 2, player.y + player.h / 2, 180 * flicker);
+    for (const c of level.checkpoints) hole(c.x + 12, c.y - 30, 70);
+    hole(level.goal.x + level.goal.w / 2, level.goal.y + level.goal.h / 2, 120);
+    for (const l of level.lava) for (let x = l.x; x <= l.x + l.w; x += 60) hole(x, l.y + 10, 90);
+    for (const pt of particles) hole(pt.x, pt.y, 18);
+    mainCtx.setTransform(1, 0, 0, 1, 0, 0);
+    mainCtx.drawImage(maskCanvas, 0, 0);
+    mainCtx.setTransform(renderScale, 0, 0, renderScale, 0, 0);
+
+    // 어둠 속에서도 발판 자리를 알 수 있게 윗면에 희미한 룬 빛
+    ctx.save();
+    ctx.translate(-Math.round(camera.x), -Math.round(camera.y));
+    ctx.fillStyle = 'rgba(185, 166, 255, 0.4)';
+    for (const o of level.oneways) ctx.fillRect(o.x + 2, o.y, o.w - 4, 1);
+    for (const c of level.crumbles) if (c.state !== 'broken') ctx.fillRect(c.x + 3, c.y, c.w - 8, 1);
+    for (const mv of level.movers) ctx.fillRect(mv.x + 2, mv.y, mv.w - 4, 1);
+    for (const sd of level.solids) ctx.fillRect(sd.x, sd.y, sd.w, 1);
+    ctx.restore();
+  }
+
   function drawVignette() {
     const v = ctx.createRadialGradient(VIEW_W / 2, VIEW_H / 2, VIEW_W * 0.35, VIEW_W / 2, VIEW_H / 2, VIEW_W * 0.75);
     v.addColorStop(0, 'rgba(0, 0, 0, 0)');
@@ -1234,37 +1416,81 @@ if ('serviceWorker' in navigator && location.protocol !== 'file:') {
 
   function drawSolids() {
     for (const s of level.solids) {
-      ctx.fillStyle = '#5a4636';
+      // 몸통: 어두운 흙, 아래로 갈수록 나락 색으로 녹아 사라짐
+      const body = ctx.createLinearGradient(0, s.y, 0, s.y + Math.max(s.h, 40));
+      body.addColorStop(0, '#4a3a33');
+      body.addColorStop(Math.min(1, 60 / Math.max(s.h, 1)), '#33272a');
+      body.addColorStop(1, s.h > 60 ? '#08041a' : '#2a2026');
+      ctx.fillStyle = body;
       ctx.fillRect(s.x, s.y, s.w, s.h);
-      // 잔디 윗면
-      ctx.fillStyle = '#58c26a';
-      ctx.fillRect(s.x, s.y, s.w, 8);
-      ctx.fillStyle = '#3f9a52';
-      ctx.fillRect(s.x, s.y + 8, s.w, 3);
-      // 흙 무늬
-      ctx.fillStyle = 'rgba(0,0,0,0.15)';
-      for (let x = s.x + 10; x < s.x + s.w - 6; x += 28) {
-        for (let y = s.y + 22; y < s.y + s.h - 4; y += 22) {
-          ctx.fillRect(x + ((y / 22) % 2) * 12, y, 6, 4);
+      // 박힌 돌 (위치는 좌표로 정해서 매번 같음)
+      for (let x = s.x + 12; x < s.x + s.w - 10; x += 34) {
+        for (let y = s.y + 20; y < s.y + Math.min(s.h, 140) - 6; y += 26) {
+          const k = ((x * 7 + y * 13) % 5);
+          ctx.fillStyle = `rgba(154, 143, 134, ${0.18 + k * 0.03})`;
+          ctx.fillRect(x + ((y / 26) % 2) * 14, y, 7 + k, 4 + (k % 2) * 2);
         }
       }
-      ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+      // 이끼 윗면 + 늘어진 이끼
+      ctx.fillStyle = '#4f9a5e';
+      ctx.fillRect(s.x, s.y, s.w, 6);
+      ctx.fillStyle = '#7cc98a';
+      ctx.fillRect(s.x, s.y, s.w, 2);
+      ctx.fillStyle = '#3a7448';
+      for (let x = s.x + 6; x < s.x + s.w - 4; x += 11) {
+        ctx.fillRect(x, s.y + 6, 3, 2 + ((x * 3) % 5));
+      }
+      // 얇은 블록은 아랫면에 나락의 붉은 림라이트
+      if (s.h <= 60) {
+        ctx.fillStyle = 'rgba(255, 90, 80, 0.55)';
+        ctx.fillRect(s.x + 2, s.y + s.h - 2, s.w - 4, 2);
+      }
+      ctx.strokeStyle = 'rgba(8, 4, 26, 0.6)';
       ctx.lineWidth = 2;
-      ctx.strokeRect(s.x + 1, s.y + 1, s.w - 2, s.h - 2);
+      ctx.beginPath();
+      ctx.moveTo(s.x + 1, s.y + Math.min(s.h, 80));
+      ctx.lineTo(s.x + 1, s.y + 1);
+      ctx.lineTo(s.x + s.w - 1, s.y + 1);
+      ctx.lineTo(s.x + s.w - 1, s.y + Math.min(s.h, 80));
+      ctx.stroke();
     }
   }
 
   function drawOneways() {
     for (const o of level.oneways) {
+      // 늘어진 덩굴 (발판 아래)
+      ctx.fillStyle = '#3f7a4a';
+      for (let x = o.x + 10; x < o.x + o.w - 6; x += 23) {
+        const len = 6 + ((x * 7) % 11);
+        ctx.fillRect(x, o.y + 12, 2, len);
+        ctx.fillRect(x - 2, o.y + 12 + len - 3, 2, 3);
+      }
+      // 판자 본체 (끝은 둥글게 닳음)
       ctx.fillStyle = '#c99a5b';
-      ctx.fillRect(o.x, o.y, o.w, 12);
+      roundRect(o.x, o.y, o.w, 12, 4);
+      ctx.fill();
       ctx.fillStyle = '#e6bb7a';
-      ctx.fillRect(o.x, o.y, o.w, 4);
-      ctx.fillStyle = '#8a6333';
-      for (let x = o.x + 6; x < o.x + o.w - 4; x += 24) ctx.fillRect(x, o.y + 5, 3, 7);
-      ctx.strokeStyle = 'rgba(0,0,0,0.35)';
-      ctx.lineWidth = 2;
-      ctx.strokeRect(o.x + 1, o.y + 1, o.w - 2, 11);
+      ctx.fillRect(o.x + 3, o.y, o.w - 6, 3);
+      // 나뭇결 2줄 (군데군데 끊김)
+      ctx.fillStyle = 'rgba(110, 70, 30, 0.55)';
+      for (let x = o.x + 4; x < o.x + o.w - 8; x += 17) {
+        ctx.fillRect(x, o.y + 5, 11, 1);
+        ctx.fillRect(x + 7, o.y + 8, 9, 1);
+      }
+      // 못
+      for (let x = o.x + 7; x < o.x + o.w - 4; x += 24) {
+        ctx.fillStyle = '#5a3d1e';
+        ctx.fillRect(x, o.y + 4, 3, 3);
+        ctx.fillStyle = '#f2dcae';
+        ctx.fillRect(x, o.y + 4, 1, 1);
+      }
+      // 아랫면 붉은 림라이트
+      ctx.fillStyle = 'rgba(255, 90, 80, 0.45)';
+      ctx.fillRect(o.x + 3, o.y + 11, o.w - 6, 1);
+      ctx.strokeStyle = 'rgba(40, 20, 10, 0.55)';
+      ctx.lineWidth = 1.5;
+      roundRect(o.x + 0.5, o.y + 0.5, o.w - 1, 11, 4);
+      ctx.stroke();
     }
   }
 
@@ -1285,8 +1511,25 @@ if ('serviceWorker' in navigator && location.protocol !== 'file:') {
       ctx.fillRect(m.x, m.y, m.w, 12);
       ctx.fillStyle = '#a9b4ff';
       ctx.fillRect(m.x, m.y, m.w, 4);
-      ctx.fillStyle = '#ffe066';
-      for (let x = m.x + 8; x < m.x + m.w - 6; x += 18) ctx.fillRect(x, m.y + 6, 6, 3);
+      // 빛나는 노란 룬 3개
+      const glow = 0.6 + 0.4 * Math.sin(time * 3 + m.bx);
+      ctx.shadowColor = 'rgba(255, 224, 102, 0.9)';
+      ctx.shadowBlur = 6 * glow;
+      ctx.strokeStyle = `rgba(255, 224, 102, ${0.6 + 0.4 * glow})`;
+      ctx.lineWidth = 1.5;
+      for (let i = 1; i <= 3; i++) {
+        const rx = m.x + (m.w * i) / 4, ry = m.y + 7.5;
+        ctx.beginPath();
+        if (i === 2) {           // 가운데: 마름모
+          ctx.moveTo(rx, ry - 3.5); ctx.lineTo(rx + 3.5, ry); ctx.lineTo(rx, ry + 3.5); ctx.lineTo(rx - 3.5, ry); ctx.closePath();
+        } else {                 // 양옆: 갈고리 모양
+          ctx.moveTo(rx - 3, ry - 3); ctx.lineTo(rx + 3, ry - 3); ctx.lineTo(rx, ry + 3.5);
+        }
+        ctx.stroke();
+      }
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = 'rgba(255, 90, 80, 0.45)';
+      ctx.fillRect(m.x + 2, m.y + 11, m.w - 4, 1);
       ctx.strokeStyle = 'rgba(0,0,0,0.4)';
       ctx.lineWidth = 2;
       ctx.strokeRect(m.x + 1, m.y + 1, m.w - 2, 11);
@@ -1298,12 +1541,32 @@ if ('serviceWorker' in navigator && location.protocol !== 'file:') {
   const mixColor = (a, b, t) =>
     `rgb(${a.map((v, i) => Math.round(v + (b[i] - v) * t)).join(',')})`;
 
+  // 끌로 깎은 듯한 각진 돌 외곽 (모서리 이 빠짐)
+  function crumbleShape(x, y, w) {
+    ctx.beginPath();
+    ctx.moveTo(x + 3, y);
+    ctx.lineTo(x + w - 7, y);
+    ctx.lineTo(x + w - 2, y + 3);
+    ctx.lineTo(x + w, y + 9);
+    ctx.lineTo(x + w - 4, y + 13);
+    ctx.lineTo(x + w * 0.55, y + 12);
+    ctx.lineTo(x + w * 0.45, y + 14);
+    ctx.lineTo(x + 5, y + 13);
+    ctx.lineTo(x, y + 8);
+    ctx.lineTo(x + 1, y + 3);
+    ctx.closePath();
+  }
+
   function drawCrumbles() {
     for (const c of level.crumbles) {
       if (c.state === 'broken') {
-        // 복구 직전 0.6초 동안 자리 표시가 깜빡임
+        // 빈자리: 양 끝에 희미한 점 2개로 위치만 알려 줌
+        ctx.fillStyle = 'rgba(200, 190, 255, 0.35)';
+        ctx.fillRect(c.x, c.y + 4, 3, 3);
+        ctx.fillRect(c.x + c.w - 3, c.y + 4, 3, 3);
+        // 복구 0.6초 전부터 점선 윤곽이 깜빡임 (초당 2.5회)
         if (c.timer > CRUMBLE_RESTORE - 0.6) {
-          ctx.globalAlpha = 0.25 + 0.25 * Math.sin(time * 30);
+          ctx.globalAlpha = 0.3 + 0.3 * Math.sin(time * Math.PI * 5);
           ctx.strokeStyle = '#ffffff';
           ctx.lineWidth = 2;
           ctx.setLineDash([5, 5]);
@@ -1313,30 +1576,54 @@ if ('serviceWorker' in navigator && location.protocol !== 'file:') {
         }
         continue;
       }
-      // 밟힌 뒤 진행도(0→1)에 따라 점점 붉어지고 더 세게 흔들림
-      const t = c.state === 'shaking' ? Math.min(1, c.timer / CRUMBLE_DELAY) : 0;
-      const sx = c.state === 'shaking' ? Math.sin(time * 70) * (1 + t * 2) : 0;
-      const x = c.x + sx;
+      // 밟힌 뒤 진행도(0→1): 색은 3단계로 붉어지고, 금이 번지고, 흔들림이 커짐
+      const shaking = c.state === 'shaking';
+      const t = shaking ? Math.min(1, c.timer / CRUMBLE_DELAY) : 0;
+      const step = shaking ? Math.min(3, 1 + Math.floor(t * 3)) / 3 : 0;
+      const sx = shaking ? Math.sin(time * 70) * (0.5 + t * 1.5) : 0;
+      const dip = shaking && c.timer < 0.12 ? 2 : 0;   // 밟는 순간 살짝 내려앉음
+      const x = c.x + sx, y = c.y + dip;
+
+      // 아래에 매달린 자갈
+      ctx.fillStyle = mixColor(CRUMBLE_STONE, CRUMBLE_RED, step * 0.6);
+      ctx.fillRect(x + c.w * 0.2, y + 14, 3, 3);
+      ctx.fillRect(x + c.w * 0.62, y + 13, 4, 4);
+      ctx.fillRect(x + c.w * 0.8, y + 14, 2, 2);
+
       ctx.shadowColor = 'rgba(255, 60, 60, 0.9)';
-      ctx.shadowBlur = 24 * t;
-      ctx.fillStyle = mixColor(CRUMBLE_STONE, CRUMBLE_RED, t);
-      ctx.fillRect(x, c.y, c.w, 12);
+      ctx.shadowBlur = t > 0.75 ? 24 * t : 0;
+      ctx.fillStyle = mixColor(CRUMBLE_STONE, CRUMBLE_RED, step);
+      crumbleShape(x, y, c.w);
+      ctx.fill();
       ctx.shadowBlur = 0;
-      ctx.fillStyle = `rgba(255,255,255,${0.25 + t * 0.2})`;
-      ctx.fillRect(x, c.y, c.w, 3);
-      // 금 간 무늬
-      ctx.strokeStyle = 'rgba(40,20,20,0.6)';
+      // 윗면 하이라이트
+      ctx.fillStyle = `rgba(255,255,255,${0.22 + t * 0.15})`;
+      ctx.fillRect(x + 3, y, c.w - 10, 2);
+
+      // 금: 평소엔 짧게, 밟히면 양 끝까지 번짐. 마지막엔 금 사이로 용암빛이 샘
+      const reach = 0.45 + 0.55 * t;
+      const crackCol = t > 0.75 ? '#ff6a1f' : 'rgba(40, 20, 20, 0.7)';
+      if (t > 0.75) { ctx.shadowColor = '#ff6a1f'; ctx.shadowBlur = 6; }
+      ctx.strokeStyle = crackCol;
       ctx.lineWidth = 1.5;
       ctx.beginPath();
-      for (let cx = x + 18; cx < x + c.w - 8; cx += 30) {
-        ctx.moveTo(cx, c.y + 2);
-        ctx.lineTo(cx + 5, c.y + 7);
-        ctx.lineTo(cx - 2, c.y + 12);
+      for (const fx of [0.22, 0.5, 0.78]) {
+        const cx = x + c.w * fx;
+        ctx.moveTo(cx, y + 1);
+        ctx.lineTo(cx + 4, y + 1 + 5 * reach);
+        ctx.lineTo(cx - 2, y + 1 + 10 * reach);
+        if (t > 0.3) {       // 옆으로 갈라지는 가지
+          ctx.moveTo(cx + 4, y + 1 + 5 * reach);
+          ctx.lineTo(cx + 4 + 9 * t, y + 4 + 4 * t);
+        }
       }
       ctx.stroke();
-      ctx.strokeStyle = 'rgba(0,0,0,0.4)';
-      ctx.lineWidth = 2;
-      ctx.strokeRect(x + 1, c.y + 1, c.w - 2, 11);
+      ctx.shadowBlur = 0;
+
+      ctx.strokeStyle = 'rgba(8, 4, 26, 0.55)';
+      ctx.lineWidth = 1.5;
+      crumbleShape(x, y, c.w);
+      ctx.stroke();
     }
   }
 
@@ -1636,8 +1923,23 @@ if ('serviceWorker' in navigator && location.protocol !== 'file:') {
   }
 
   function render() {
+    // 배경은 버퍼에 그린 뒤, 화면 아래쪽만 가로로 일렁이게(아지랑이) 옮겨 그림
+    const W = canvas.width, H = canvas.height;
+    if (bgCanvas.width !== W || bgCanvas.height !== H) { bgCanvas.width = W; bgCanvas.height = H; }
+    ctx = bgCtx;
     ctx.setTransform(renderScale, 0, 0, renderScale, 0, 0);
     drawBackground();
+    ctx = mainCtx;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.drawImage(bgCanvas, 0, 0);
+    const hazeTop = Math.floor(H * 0.55);
+    const strip = Math.max(2, Math.round(3 * renderScale));
+    for (let y = hazeTop; y < H; y += strip) {
+      const k = (y - hazeTop) / (H - hazeTop);
+      const off = Math.sin(y / (9 * renderScale) - time * 3.2) * k * 2.2 * renderScale;
+      ctx.drawImage(bgCanvas, 0, y, W, strip, off, y, W, strip);
+    }
+    ctx.setTransform(renderScale, 0, 0, renderScale, 0, 0);
 
     const shake = shakeTimer > 0 ? shakeTimer * 30 : 0;
     const shx = (Math.random() - 0.5) * shake;
@@ -1654,10 +1956,16 @@ if ('serviceWorker' in navigator && location.protocol !== 'file:') {
     drawSpikes();
     drawGoal();
     drawPlayer();
+    drawFallFx();
     drawParticles();
     ctx.restore();
+    if (STAGES[stageIndex].dark && state !== 'menu') drawDarkness();
+    drawHaze();
+    drawForeground();
     drawEmbers();
+    drawFallDarkness();
     drawVignette();
+    drawHeartbeat();
 
     if (flashTimer > 0) {
       ctx.fillStyle = `rgba(255,255,255,${(flashTimer / 0.35) * 0.6})`;
