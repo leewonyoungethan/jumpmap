@@ -2,8 +2,14 @@
 <html lang="ko">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>점프맵 플랫포머</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#0b0820">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<title>나락의 징검다리</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body {
@@ -16,17 +22,187 @@
     justify-content: center;
     font-family: "Segoe UI", "Malgun Gothic", sans-serif;
   }
+  body {
+    touch-action: none;            /* 터치 시 확대/스크롤 방지 */
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
+    -webkit-tap-highlight-color: transparent;
+  }
   canvas {
     display: block;
     border-radius: 8px;
     box-shadow: 0 0 40px rgba(0, 0, 0, 0.6);
     image-rendering: auto;
   }
+
+  /* ===== 모바일 터치 버튼 (터치 기기에서만 표시) ===== */
+  #touch { display: none; }
+  body.touch #touch { display: block; }
+  .tbtn {
+    position: fixed;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    border: 2px solid rgba(255, 255, 255, 0.35);
+    background: rgba(20, 16, 50, 0.35);
+    color: rgba(255, 255, 255, 0.85);
+    font: bold 26px "Segoe UI", "Malgun Gothic", sans-serif;
+    backdrop-filter: blur(2px);
+    pointer-events: none;          /* 입력은 #touch 영역에서 일괄 처리 */
+  }
+  .tbtn.on {
+    background: rgba(120, 180, 255, 0.45);
+    border-color: rgba(255, 255, 255, 0.8);
+  }
+  #btnLeft  { left:  calc(18px + env(safe-area-inset-left));  bottom: calc(18px + env(safe-area-inset-bottom)); width: 78px; height: 78px; }
+  #btnRight { left:  calc(110px + env(safe-area-inset-left)); bottom: calc(18px + env(safe-area-inset-bottom)); width: 78px; height: 78px; }
+  #btnJump  { right: calc(22px + env(safe-area-inset-right)); bottom: calc(22px + env(safe-area-inset-bottom)); width: 96px; height: 96px; font-size: 20px; }
+  #btnReset { right: calc(14px + env(safe-area-inset-right)); top: calc(56px + env(safe-area-inset-top)); width: 44px; height: 44px; font-size: 20px; }
+
+  /* 세로 화면이면 가로로 돌리라는 안내 */
+  #rotate {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 10;
+    background: #0b0e1a;
+    color: #fff;
+    font: bold 20px "Segoe UI", "Malgun Gothic", sans-serif;
+    text-align: center;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+  }
+  #rotate .icon { font-size: 56px; animation: tilt 1.6s ease-in-out infinite; }
+  @keyframes tilt { 0%, 30% { transform: rotate(0); } 60%, 100% { transform: rotate(90deg); } }
+  @media (orientation: portrait) {
+    body.touch #rotate { display: flex; }
+  }
+  #btnMenu { right: calc(66px + env(safe-area-inset-right)); top: calc(56px + env(safe-area-inset-top)); width: 44px; height: 44px; font-size: 20px; }
+  body.menu-open #touch { display: none; }
+
+  /* ===== 메인 메뉴 (캐릭터 꾸미기 + 스테이지 선택) ===== */
+  #menu {
+    position: fixed;
+    inset: 0;
+    z-index: 5;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 12px;
+    background: rgba(8, 6, 24, 0.72);
+    backdrop-filter: blur(3px);
+    color: #fff;
+    overflow-y: auto;
+    touch-action: pan-y;
+  }
+  #menu[hidden] { display: none; }
+  .menu-panel {
+    width: min(880px, 100%);
+    margin: auto;
+  }
+  .menu-title {
+    text-align: center;
+    font-size: clamp(26px, 5vw, 44px);
+    font-weight: 800;
+    letter-spacing: 2px;
+    color: #ffe066;
+    text-shadow: 0 3px 0 #7a1414, 0 0 24px rgba(255, 90, 60, 0.6);
+    margin-bottom: 4px;
+  }
+  .menu-sub { text-align: center; color: rgba(255,255,255,0.6); font-size: 13px; margin-bottom: 14px; }
+  .menu-cols { display: flex; gap: 14px; flex-wrap: wrap; }
+  .menu-card {
+    flex: 1 1 300px;
+    background: rgba(30, 24, 70, 0.75);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 14px;
+    padding: 14px;
+  }
+  .menu-card h2 { font-size: 16px; margin-bottom: 10px; color: #cfd6ff; }
+  .menu-card h3 { font-size: 13px; margin: 10px 0 6px; color: rgba(255,255,255,0.7); font-weight: 600; }
+  .char-row { display: flex; gap: 12px; align-items: flex-start; }
+  #preview { width: 96px; height: 96px; flex: none; border-radius: 12px; background: rgba(0,0,0,0.25); }
+  .char-opts { flex: 1; min-width: 0; }
+  .swatches, .patterns { display: flex; flex-wrap: wrap; gap: 6px; }
+  .swatch {
+    width: 30px; height: 30px; border-radius: 50%;
+    border: 3px solid transparent; cursor: pointer;
+    box-shadow: inset 0 -4px 0 rgba(0,0,0,0.25);
+  }
+  .swatch.sel { border-color: #fff; }
+  .pat {
+    display: flex; flex-direction: column; align-items: center; gap: 2px;
+    background: rgba(0,0,0,0.25); border: 2px solid transparent; border-radius: 10px;
+    padding: 4px 4px 3px; cursor: pointer; color: #fff; font: 11px "Segoe UI", "Malgun Gothic", sans-serif;
+  }
+  .pat canvas { width: 34px; height: 34px; }
+  .pat.sel { border-color: #ffe066; background: rgba(255, 224, 102, 0.12); }
+  .stages { display: flex; flex-direction: column; gap: 8px; }
+  .stage {
+    display: flex; align-items: center; gap: 10px; width: 100%;
+    padding: 10px 12px; border-radius: 10px; cursor: pointer; text-align: left;
+    background: rgba(255,255,255,0.08); border: 2px solid rgba(255,255,255,0.12); color: #fff;
+    font: 15px "Segoe UI", "Malgun Gothic", sans-serif;
+  }
+  .stage:hover:not(:disabled) { background: rgba(255,255,255,0.15); border-color: rgba(255,224,102,0.6); }
+  .stage .num {
+    width: 32px; height: 32px; flex: none; border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    background: #5dff8f; color: #0b2a16; font-weight: 800;
+  }
+  .stage .name { flex: 1; font-weight: 700; }
+  .stage .best { font-size: 12px; color: rgba(255,255,255,0.65); }
+  .stage:disabled { cursor: not-allowed; opacity: 0.45; }
+  .stage:disabled .num { background: #555a70; color: #ccc; }
+  .menu-hint { text-align: center; font-size: 12px; color: rgba(255,255,255,0.55); margin-top: 12px; }
 </style>
 </head>
 <body>
 <canvas id="game"></canvas>
+<div id="touch">
+  <div class="tbtn" id="btnLeft" data-key="ArrowLeft">◀</div>
+  <div class="tbtn" id="btnRight" data-key="ArrowRight">▶</div>
+  <div class="tbtn" id="btnJump" data-key="Space">점프</div>
+  <div class="tbtn" id="btnReset" data-action="reset">↺</div>
+  <div class="tbtn" id="btnMenu" data-action="menu">☰</div>
+</div>
+<div id="menu" hidden>
+  <div class="menu-panel">
+    <div class="menu-title">나락의 징검다리</div>
+    <div class="menu-sub">하드코어 점프맵</div>
+    <div class="menu-cols">
+      <div class="menu-card">
+        <h2>캐릭터 꾸미기</h2>
+        <div class="char-row">
+          <canvas id="preview"></canvas>
+          <div class="char-opts">
+            <h3 style="margin-top:0">색깔</h3>
+            <div class="swatches" id="swatches"></div>
+          </div>
+        </div>
+        <h3>무늬</h3>
+        <div class="patterns" id="patterns"></div>
+      </div>
+      <div class="menu-card">
+        <h2>스테이지</h2>
+        <div class="stages" id="stageList"></div>
+      </div>
+    </div>
+    <div class="menu-hint" id="menuHint"></div>
+  </div>
+</div>
+<div id="rotate"><div class="icon">📱</div>화면을 가로로 돌려주세요</div>
 
+<script>
+// 오프라인 플레이: 한 번 접속하면 게임 파일을 저장해 두고 인터넷 없이도 실행
+if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+  window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
+}
+</script>
 <script>
 (() => {
   'use strict';
@@ -34,8 +210,6 @@
   // ===================== 기본 설정 =====================
   const VIEW_W = 960;            // 논리 화면 크기
   const VIEW_H = 540;
-  const WORLD_W = 3500;          // 월드 크기
-  const WORLD_H = 900;
   const STEP = 1 / 120;          // 고정 물리 스텝 (초)
 
   // 물리 상수
@@ -73,80 +247,194 @@
   window.addEventListener('resize', resize);
   resize();
 
-  // ===================== 레벨 데이터 =====================
+  // ===================== 스테이지 데이터 =====================
   // solid: 사방이 막힌 블록 / oneway: 위에서만 밟을 수 있는 발판
   // spikes: 바닥 위에 놓이는 가시 (y = 가시가 놓인 면의 높이) / lava: 용암 영역
-  const G = 820; // 기본 바닥 높이
+  // 새 스테이지는 이 배열에 하나 더 추가하면 메뉴에 자동으로 나타남
+  // (make()는 매번 새 객체를 만들어서, 다시 시작할 때 발판 상태가 깨끗하게 초기화됨)
+  const G = 820; // 1스테이지 기본 바닥 높이
 
-  const level = {
-    start: { x: 60, y: G - 36 },
-    solids: [
-      // 기본 바닥
-      { x: 0,    y: G,   w: 600,  h: 80 },
-      { x: 740,  y: G,   w: 420,  h: 80 },
-      { x: 1700, y: G,   w: 400,  h: 80 },
-      // 뛰어넘어야 하는 벽 블록
-      { x: 1060, y: G - 60, w: 60, h: 60 },
-      // 상층부 블록 (가운데 가시가 있음)
-      { x: 2680, y: 340, w: 160, h: 24 },
-      // 도착 지점 블록
-      { x: 3240, y: 160, w: 200, h: 24 },
-    ],
-    oneways: [
-      { x: 220,  y: 720, w: 120 },
-      { x: 880,  y: 720, w: 140 },
-      // 용암 바다 위 징검다리 (가운데는 움직이는 발판)
-      { x: 1200, y: 740, w: 100 },
-      { x: 1580, y: 740, w: 100 },
-      // 지그재그 오르막
-      { x: 1820, y: 720, w: 100 },
-      { x: 1800, y: 540, w: 110 },
-      { x: 2130, y: 380, w: 120 },
-      // 상층 루트
-      { x: 2500, y: 320, w: 90 },
-    ],
-    // 함정 발판: 원웨이 발판처럼 위에서만 밟을 수 있음
-    // 밟으면 CRUMBLE_DELAY초 뒤 부서지고, CRUMBLE_RESTORE초 뒤 원래대로 복구
-    crumbles: [
-      { x: 1960, y: 630, w: 100 },
-      { x: 1960, y: 450, w: 100 },
-      { x: 3080, y: 200, w: 100 },
-    ],
-    // 움직이는 발판: 기준 위치(bx, by)에서 sin 곡선으로 왕복 (ax: 가로 폭, ay: 세로 폭, period: 왕복 주기[초])
-    // 위에서만 밟을 수 있고, 올라타면 발판과 함께 이동
-    movers: [
-      { bx: 1390, by: 700, w: 100, ax: 70, ay: 0,  period: 3.0, phase: 0 },
-      { bx: 2330, by: 380, w: 90,  ax: 80, ay: 0,  period: 3.2, phase: 1 },
-      { bx: 2900, by: 260, w: 100, ax: 0,  ay: 70, period: 3.5, phase: 0 },
-    ],
-    // 체크포인트: 깃발에 닿으면 활성화, 죽으면 마지막 체크포인트에서 부활 (y = 깃발이 서 있는 면의 높이)
-    checkpoints: [
-      { x: 790,  y: G },
-      { x: 1720, y: G },
-      { x: 2170, y: 380 },
-      { x: 2690, y: 340 },
-    ],
-    spikes: [
-      { x: 380,  y: G,   w: 40 },
-      { x: 900,  y: G,   w: 80 },
-      { x: 1950, y: G,   w: 140 },
-      { x: 2740, y: 340, w: 40 },
-      { x: 2525, y: 320, w: 20 },
-    ],
-    lava: [
-      { x: 600,  y: 850, w: 140,  h: 50 },
-      { x: 1160, y: 850, w: 540,  h: 50 },
-    ],
-    // 나락: 바닥이 없는 구간 (떨어지면 사망 없이 마지막 체크포인트로 구조됨)
-    abyss: [
-      { x: 2100, w: 1400 },
-    ],
-    goal: { x: 3330, y: 100, w: 40, h: 60 },
-  };
+  const STAGES = [
+    {
+      name: '첫 걸음',
+      worldW: 3500, worldH: 900,
+      make: () => ({
+        start: { x: 60, y: G - 36 },
+        solids: [
+          // 기본 바닥
+          { x: 0,    y: G,   w: 600,  h: 80 },
+          { x: 740,  y: G,   w: 420,  h: 80 },
+          { x: 1700, y: G,   w: 400,  h: 80 },
+          // 뛰어넘어야 하는 벽 블록
+          { x: 1060, y: G - 60, w: 60, h: 60 },
+          // 상층부 블록 (가운데 가시가 있음)
+          { x: 2680, y: 340, w: 160, h: 24 },
+          // 도착 지점 블록
+          { x: 3240, y: 160, w: 200, h: 24 },
+        ],
+        oneways: [
+          { x: 220,  y: 720, w: 120 },
+          { x: 880,  y: 720, w: 140 },
+          // 용암 바다 위 징검다리 (가운데는 움직이는 발판)
+          { x: 1200, y: 740, w: 100 },
+          { x: 1580, y: 740, w: 100 },
+          // 지그재그 오르막
+          { x: 1820, y: 720, w: 100 },
+          { x: 1800, y: 540, w: 110 },
+          { x: 2130, y: 380, w: 120 },
+          // 상층 루트
+          { x: 2500, y: 320, w: 90 },
+        ],
+        // 함정 발판: 원웨이 발판처럼 위에서만 밟을 수 있음
+        // 밟으면 CRUMBLE_DELAY초 뒤 부서지고, CRUMBLE_RESTORE초 뒤 원래대로 복구
+        crumbles: [
+          { x: 1960, y: 630, w: 100 },
+          { x: 1960, y: 450, w: 100 },
+          { x: 3080, y: 200, w: 100 },
+        ],
+        // 움직이는 발판: 기준 위치(bx, by)에서 sin 곡선으로 왕복 (ax: 가로 폭, ay: 세로 폭, period: 왕복 주기[초])
+        // 위에서만 밟을 수 있고, 올라타면 발판과 함께 이동
+        movers: [
+          { bx: 1390, by: 700, w: 100, ax: 70, ay: 0,  period: 3.0, phase: 0 },
+          { bx: 2330, by: 380, w: 90,  ax: 80, ay: 0,  period: 3.2, phase: 1 },
+          { bx: 2900, by: 260, w: 100, ax: 0,  ay: 70, period: 3.5, phase: 0 },
+        ],
+        // 체크포인트: 깃발에 닿으면 활성화, 죽으면 마지막 체크포인트에서 부활 (y = 깃발이 서 있는 면의 높이)
+        checkpoints: [
+          { x: 790,  y: G },
+          { x: 1720, y: G },
+          { x: 2170, y: 380 },
+          { x: 2690, y: 340 },
+        ],
+        spikes: [
+          { x: 380,  y: G,   w: 40 },
+          { x: 900,  y: G,   w: 80 },
+          { x: 1950, y: G,   w: 140 },
+          { x: 2740, y: 340, w: 40 },
+          { x: 2525, y: 320, w: 20 },
+        ],
+        lava: [
+          { x: 600,  y: 850, w: 140,  h: 50 },
+          { x: 1160, y: 850, w: 540,  h: 50 },
+        ],
+        // 나락: 바닥이 없는 구간 (떨어지면 사망 없이 마지막 체크포인트로 구조됨)
+        abyss: [
+          { x: 2100, w: 1400 },
+        ],
+        goal: { x: 3330, y: 100, w: 40, h: 60 },
+      }),
+    },
+    {
+      name: '무너지는 다리',
+      worldW: 3600, worldH: 900,
+      sky: ['#05081a', '#13214a', '#26386a', '#3e3466'],
+      make: () => ({
+        start: { x: 60, y: 700 - 36 },
+        solids: [
+          { x: 0,    y: 700, w: 300, h: 200 },   // 출발 바위
+          { x: 1460, y: 640, w: 240, h: 260 },   // 가운데 섬
+          { x: 3160, y: 360, w: 440, h: 540 },   // 도착 절벽
+        ],
+        oneways: [
+          { x: 940,  y: 620, w: 80 },
+          { x: 2440, y: 520, w: 100 },
+        ],
+        // 대부분이 함정 발판인 다리: 멈추지 말고 건너야 함
+        crumbles: [
+          { x: 400,  y: 680, w: 90 },
+          { x: 580,  y: 640, w: 90 },
+          { x: 760,  y: 600, w: 90 },
+          { x: 1800, y: 600, w: 80 },
+          { x: 1960, y: 560, w: 80 },
+          { x: 2120, y: 600, w: 80 },
+          { x: 2280, y: 560, w: 80 },
+          { x: 2820, y: 420, w: 80 },
+          { x: 3000, y: 380, w: 80 },
+        ],
+        movers: [
+          { bx: 1170, by: 620, w: 90, ax: 90, ay: 0,  period: 3.0, phase: 0 },
+          { bx: 2640, by: 480, w: 90, ax: 0,  ay: 80, period: 3.0, phase: 0 },
+        ],
+        checkpoints: [
+          { x: 1480, y: 640 },
+          { x: 2460, y: 520 },
+        ],
+        spikes: [
+          { x: 1580, y: 640, w: 40 },
+          { x: 3280, y: 360, w: 40 },
+        ],
+        lava: [],
+        abyss: [
+          { x: 0, w: 3600 },
+        ],
+        goal: { x: 3500, y: 300, w: 40, h: 60 },
+      }),
+    },
+    {
+      name: '나락의 심장',
+      worldW: 1600, worldH: 1800,
+      sky: ['#140306', '#340a14', '#5e161c', '#9a3a1c'],
+      make: () => ({
+        start: { x: 60, y: 1700 - 36 },
+        solids: [
+          { x: 0,    y: 1700, w: 400, h: 100 },
+          { x: 1200, y: 1700, w: 400, h: 100 },
+          { x: 700,  y: 820,  w: 160, h: 24 },   // 중간 쉼터 (가시 넘어 체크포인트)
+          { x: 860,  y: 260,  w: 320, h: 24 },   // 꼭대기 도착 지점
+        ],
+        // 아래에서 위로 올라가는 수직 스테이지
+        oneways: [
+          { x: 200,  y: 1620, w: 100 },
+          { x: 60,   y: 1540, w: 100 },
+          { x: 420,  y: 1400, w: 90 },
+          { x: 900,  y: 1320, w: 100 },
+          { x: 1440, y: 1110, w: 100 },
+          { x: 1300, y: 1030, w: 90 },
+          { x: 40,   y: 480,  w: 100 },
+          { x: 200,  y: 400,  w: 90 },
+        ],
+        crumbles: [
+          { x: 220,  y: 1460, w: 100 },
+          { x: 1080, y: 1250, w: 90 },
+          { x: 1260, y: 1180, w: 90 },
+          { x: 1120, y: 960,  w: 90 },
+          { x: 940,  y: 890,  w: 90 },
+          { x: 380,  y: 620,  w: 90 },
+          { x: 200,  y: 550,  w: 90 },
+          { x: 380,  y: 330,  w: 90 },
+        ],
+        movers: [
+          { bx: 640, by: 1360, w: 90, ax: 80, ay: 0,  period: 3.0, phase: 0 },
+          { bx: 560, by: 700,  w: 90, ax: 0,  ay: 60, period: 2.8, phase: 0 },
+          { bx: 600, by: 300,  w: 90, ax: 70, ay: 0,  period: 2.6, phase: 0 },
+        ],
+        checkpoints: [
+          { x: 920, y: 1320 },
+          { x: 705, y: 820 },
+          { x: 50,  y: 480 },
+        ],
+        spikes: [
+          { x: 750, y: 820, w: 30 },
+          { x: 960, y: 260, w: 40 },
+        ],
+        lava: [
+          { x: 400, y: 1720, w: 800, h: 80 },
+        ],
+        abyss: [],
+        goal: { x: 1110, y: 200, w: 40, h: 60 },
+      }),
+    },
+  ];
+
+  let stageIndex = 0;
+  let level = null;
+  let WORLD_W = 0;
+  let WORLD_H = 0;
+  let spikeBoxes = [];
 
   const SPIKE_H = 20;
   // 가시의 실제 판정 박스 (그림보다 조금 작게 해서 억울한 판정 방지)
-  const spikeBoxes = level.spikes.map(s => ({
+  const makeSpikeBoxes = () => level.spikes.map(s => ({
     x: s.x + 4, y: s.y - SPIKE_H + 8, w: s.w - 8, h: SPIKE_H - 8,
   }));
 
@@ -207,6 +495,137 @@
     }
   }
 
+  // ===================== 저장 데이터 (캐릭터, 진행도, 기록) =====================
+  const SAVE_KEY = 'narak-jumpmap-save';
+  const save = { skin: 0, pattern: 'none', unlocked: 1, best: {}, last: 0 };
+  try { Object.assign(save, JSON.parse(localStorage.getItem(SAVE_KEY) || '{}')); } catch (_) { /* 저장소 사용 불가 */ }
+  function writeSave() {
+    try { localStorage.setItem(SAVE_KEY, JSON.stringify(save)); } catch (_) { /* 무시 */ }
+  }
+
+  // ===================== 캐릭터 꾸미기 =====================
+  // body: 몸 색 / light: 윗부분 하이라이트 / dark: 외곽선 / pat: 무늬 색 / accent: 별 무늬 색
+  const SKINS = [
+    { name: '파랑', body: '#4fa3ff', light: '#8cc6ff', dark: '#1b2a5c', pat: 'rgba(16, 40, 110, 0.35)', accent: '#ffe066' },
+    { name: '빨강', body: '#ff5a5a', light: '#ff9c9c', dark: '#5c1b1b', pat: 'rgba(110, 10, 10, 0.35)', accent: '#ffe066' },
+    { name: '초록', body: '#4fd67a', light: '#9cf0b5', dark: '#1b5c33', pat: 'rgba(10, 80, 30, 0.35)',  accent: '#ffe066' },
+    { name: '노랑', body: '#ffd23f', light: '#ffe98c', dark: '#6b5410', pat: 'rgba(120, 80, 0, 0.35)',  accent: '#ff5a3c' },
+    { name: '보라', body: '#a974ff', light: '#d2b5ff', dark: '#3a1b6b', pat: 'rgba(50, 10, 110, 0.35)', accent: '#ffe066' },
+    { name: '분홍', body: '#ff7ac8', light: '#ffb8e2', dark: '#6b1b4a', pat: 'rgba(120, 10, 70, 0.3)',  accent: '#fff3a0' },
+    { name: '주황', body: '#ff9a3c', light: '#ffc78c', dark: '#6b3a10', pat: 'rgba(120, 50, 0, 0.35)',  accent: '#fff3a0' },
+    { name: '하양', body: '#e8ecf5', light: '#ffffff', dark: '#4a5068', pat: 'rgba(60, 70, 110, 0.3)',  accent: '#ff7ac8' },
+    { name: '검정', body: '#3a3f52', light: '#6a7088', dark: '#0e1018', pat: 'rgba(255, 255, 255, 0.28)', accent: '#ffe066' },
+  ];
+  const PATTERNS = [
+    { id: 'none',    name: '없음' },
+    { id: 'stripes', name: '줄무늬' },
+    { id: 'dots',    name: '물방울' },
+    { id: 'checker', name: '체크' },
+    { id: 'zigzag',  name: '지그재그' },
+    { id: 'star',    name: '별' },
+    { id: 'belly',   name: '배' },
+  ];
+  const curSkin = () => SKINS[save.skin] || SKINS[0];
+
+  function rr(c, x, y, w, h, r) {
+    c.beginPath();
+    c.moveTo(x + r, y);
+    c.lineTo(x + w - r, y);
+    c.quadraticCurveTo(x + w, y, x + w, y + r);
+    c.lineTo(x + w, y + h - r);
+    c.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+    c.lineTo(x + r, y + h);
+    c.quadraticCurveTo(x, y + h, x, y + h - r);
+    c.lineTo(x, y + r);
+    c.quadraticCurveTo(x, y, x + r, y);
+    c.closePath();
+  }
+
+  // 무늬는 몸의 아래쪽 절반(옷처럼)에만 그려서 눈을 가리지 않음
+  function drawPattern(c, x, y, w, h, pattern, skin) {
+    c.fillStyle = skin.pat;
+    c.strokeStyle = skin.pat;
+    const top = y + h * 0.55;
+    if (pattern === 'stripes') {
+      for (let yy = top; yy < y + h; yy += 7) c.fillRect(x, yy, w, 3.5);
+    } else if (pattern === 'dots') {
+      for (const [px, py] of [[0.2, 0.64], [0.55, 0.74], [0.85, 0.6], [0.33, 0.9], [0.75, 0.94], [0.05, 0.86]]) {
+        c.beginPath();
+        c.arc(x + w * px, y + h * py, w * 0.1, 0, Math.PI * 2);
+        c.fill();
+      }
+    } else if (pattern === 'checker') {
+      const cell = w / 4;
+      for (let j = 0; top + j * cell < y + h; j++) {
+        for (let i = 0; i < 4; i++) if ((i + j) % 2 === 0) c.fillRect(x + i * cell, top + j * cell, cell, cell);
+      }
+    } else if (pattern === 'zigzag') {
+      c.lineWidth = w * 0.11;
+      for (const row of [0.64, 0.86]) {
+        c.beginPath();
+        for (let i = 0; i <= 6; i++) {
+          const px = x + (w / 6) * i;
+          const py = y + h * row + (i % 2 ? -w * 0.08 : w * 0.08);
+          if (i === 0) c.moveTo(px, py); else c.lineTo(px, py);
+        }
+        c.stroke();
+      }
+    } else if (pattern === 'star') {
+      const cx = x + w / 2, cy = y + h * 0.76, R = w * 0.24, r = R * 0.45;
+      c.beginPath();
+      for (let i = 0; i < 10; i++) {
+        const a = -Math.PI / 2 + (i * Math.PI) / 5;
+        const rad = i % 2 ? r : R;
+        c.lineTo(cx + Math.cos(a) * rad, cy + Math.sin(a) * rad);
+      }
+      c.closePath();
+      c.fillStyle = skin.accent;
+      c.fill();
+    } else if (pattern === 'belly') {
+      c.fillStyle = 'rgba(255, 255, 255, 0.55)';
+      c.beginPath();
+      c.ellipse(x + w / 2, y + h * 0.8, w * 0.3, h * 0.2, 0, 0, Math.PI * 2);
+      c.fill();
+    }
+  }
+
+  // 게임 화면과 메뉴 미리보기에서 같이 쓰는 캐릭터 그리기
+  function drawCharacter(c, x, y, w, h, facing, blink, skin, pattern) {
+    c.fillStyle = skin.dark;
+    rr(c, x - 2, y - 2, w + 4, h + 4, 8);
+    c.fill();
+    c.fillStyle = skin.body;
+    rr(c, x, y, w, h, 6);
+    c.fill();
+    c.save();
+    rr(c, x, y, w, h, 6);
+    c.clip();
+    drawPattern(c, x, y, w, h, pattern, skin);
+    c.restore();
+    c.fillStyle = skin.light;
+    rr(c, x + 3, y + 3, w - 6, 8, 4);
+    c.fill();
+
+    // 눈
+    const eyeY = y + h * 0.35;
+    const lookX = facing * 3;
+    c.fillStyle = '#fff';
+    if (blink) {
+      c.fillRect(x + w * 0.25 + lookX - 3, eyeY + 4, 7, 2);
+      c.fillRect(x + w * 0.62 + lookX - 3, eyeY + 4, 7, 2);
+    } else {
+      c.fillRect(x + w * 0.25 + lookX - 3, eyeY, 7, 9);
+      c.fillRect(x + w * 0.62 + lookX - 3, eyeY, 7, 9);
+      c.fillStyle = '#10163a';
+      c.fillRect(x + w * 0.25 + lookX + facing * 1.5 - 1, eyeY + 2, 4, 6);
+      c.fillRect(x + w * 0.62 + lookX + facing * 1.5 - 1, eyeY + 2, 4, 6);
+    }
+    // 볼 홍조
+    c.fillStyle = 'rgba(255, 120, 160, 0.45)';
+    c.fillRect(x + w * 0.12 + lookX, eyeY + 11, 5, 3);
+    c.fillRect(x + w * 0.78 + lookX - 4, eyeY + 11, 5, 3);
+  }
+
   // ===================== 입력 처리 =====================
   const keys = new Set();
   let jumpPressedAt = -Infinity; // 점프 버퍼용
@@ -216,25 +635,116 @@
 
   window.addEventListener('keydown', e => {
     if (BLOCKED.includes(e.code)) e.preventDefault();
+    if (state === 'menu') {
+      if (e.code === 'Enter') startStage(Math.min(save.last, save.unlocked - 1));
+      return;
+    }
     if (JUMP_KEYS.includes(e.code) && !e.repeat) jumpPressedAt = time;
     if (e.code === 'Enter' && state === 'dead') respawn();          // 마지막 체크포인트에서 부활
-    if (e.code === 'Enter' && state === 'clear') resetGame();       // 클리어 후엔 처음부터
-    if (e.code === 'KeyR' && !e.repeat) resetGame();
+    if (e.code === 'Enter' && state === 'clear') nextStage();       // 다음 스테이지 (마지막이면 메뉴)
+    if (e.code === 'KeyR' && !e.repeat) resetGame();                // 이 스테이지 처음부터
+    if (e.code === 'Escape') openMenu();
     keys.add(e.code);
   });
   window.addEventListener('keyup', e => keys.delete(e.code));
   window.addEventListener('blur', () => keys.clear());
+
+  // ===================== 모바일 터치 입력 =====================
+  // 손가락마다(pointerId) 어떤 버튼 위에 있는지 추적 → 버튼 사이를 미끄러져도 바로 전환되고 멀티터치(이동+점프)도 가능
+  let isTouch = window.matchMedia('(pointer: coarse)').matches;
+  const touchButtons = [...document.querySelectorAll('#touch .tbtn')];
+  const fingers = new Map(); // pointerId -> 버튼 요소
+
+  function enableTouchUI() {
+    isTouch = true;
+    document.body.classList.add('touch');
+  }
+  if (isTouch) enableTouchUI();
+
+  // 가로 고정 + 전체화면 (지원하는 브라우저만, 실패해도 무시)
+  let triedFullscreen = false;
+  function tryFullscreen() {
+    if (triedFullscreen) return;
+    triedFullscreen = true;
+    const el = document.documentElement;
+    const req = el.requestFullscreen || el.webkitRequestFullscreen;
+    if (!req) return;
+    try {
+      Promise.resolve(req.call(el))
+        .then(() => screen.orientation && screen.orientation.lock && screen.orientation.lock('landscape'))
+        .catch(() => {});
+    } catch (_) { /* 미지원 */ }
+  }
+
+  function buttonAt(x, y) {
+    for (const b of touchButtons) {
+      const r = b.getBoundingClientRect();
+      // 손가락이 살짝 벗어나도 인식되도록 판정을 넓게
+      const pad = 14;
+      if (x >= r.left - pad && x <= r.right + pad && y >= r.top - pad && y <= r.bottom + pad) return b;
+    }
+    return null;
+  }
+
+  function pressButton(b) {
+    b.classList.add('on');
+    if (b.dataset.action === 'reset') { resetGame(); return; }
+    if (b.dataset.action === 'menu') { openMenu(); return; }
+    const code = b.dataset.key;
+    if (JUMP_KEYS.includes(code)) jumpPressedAt = time;
+    keys.add(code);
+  }
+
+  function releaseButton(b) {
+    // 다른 손가락이 같은 버튼을 누르고 있으면 유지
+    for (const other of fingers.values()) if (other === b) return;
+    b.classList.remove('on');
+    if (b.dataset.key) keys.delete(b.dataset.key);
+  }
+
+  function setFinger(id, b) {
+    const prev = fingers.get(id) || null;
+    if (prev === b) return;
+    if (b) fingers.set(id, b); else fingers.delete(id);
+    if (prev) releaseButton(prev);
+    if (b) pressButton(b);
+  }
+
+  window.addEventListener('pointerdown', e => {
+    if (e.pointerType !== 'touch') return;
+    if (!isTouch) enableTouchUI();
+    tryFullscreen();
+    if (state === 'menu') return;    // 메뉴에서는 일반 버튼 클릭으로 처리
+    e.preventDefault();
+    const b = buttonAt(e.clientX, e.clientY);
+    if (b) {
+      setFinger(e.pointerId, b);
+    } else if (state === 'dead') {
+      respawn();                     // 버튼 밖을 터치하면 체크포인트에서 다시 시작
+    } else if (state === 'clear') {
+      nextStage();
+    }
+  }, { passive: false });
+  window.addEventListener('pointermove', e => {
+    if (e.pointerType !== 'touch' || !fingers.has(e.pointerId)) return;
+    const b = buttonAt(e.clientX, e.clientY);
+    // 다시하기/메뉴 버튼은 미끄러져 들어와서 눌리지 않도록 처음 누를 때만 인정
+    setFinger(e.pointerId, b && b.dataset.action ? null : b);
+  });
+  const endFinger = e => { if (e.pointerType === 'touch') setFinger(e.pointerId, null); };
+  window.addEventListener('pointerup', endFinger);
+  window.addEventListener('pointercancel', endFinger);
+  window.addEventListener('contextmenu', e => e.preventDefault());
 
   const isLeft  = () => keys.has('ArrowLeft') || keys.has('KeyA');
   const isRight = () => keys.has('ArrowRight') || keys.has('KeyD');
   const isJumpHeld = () => JUMP_KEYS.some(k => keys.has(k));
 
   // ===================== 게임 상태 =====================
-  let state = 'playing'; // 'playing' | 'dead' | 'clear'
+  let state = 'menu';    // 'menu' | 'playing' | 'dead' | 'clear'
   let time = 0;          // 전체 경과 시간 (애니메이션용)
   let runTime = 0;       // 이번 도전 기록
   let deaths = 0;
-  let bestTime = null;
   let particles = [];
   let stateTimer = 0;
   let currentCp = null;  // 마지막으로 활성화한 체크포인트
@@ -301,14 +811,32 @@
     burst(player.x + player.w / 2, player.y + player.h / 2, '#9ad8ff', 24, 260);
   }
 
-  // 완전히 처음부터 (기록, 사망 횟수, 체크포인트 초기화)
+  // 이 스테이지를 처음부터 (기록, 사망 횟수, 체크포인트, 발판 상태 초기화)
   function resetGame() {
+    level = STAGES[stageIndex].make();
+    WORLD_W = STAGES[stageIndex].worldW;
+    WORLD_H = STAGES[stageIndex].worldH;
+    spikeBoxes = makeSpikeBoxes();
+    updateMovers();
     runTime = 0;
     deaths = 0;
     currentCp = null;
-    for (const c of level.checkpoints) c.active = false;
-    toastTimer = 0;
     respawn();
+    toastText = `STAGE ${stageIndex + 1} · ${STAGES[stageIndex].name}`;
+    toastTimer = 2;
+  }
+
+  function startStage(i) {
+    stageIndex = i;
+    save.last = i;
+    writeSave();
+    closeMenu();
+    resetGame();
+  }
+
+  function nextStage() {
+    if (stageIndex + 1 < STAGES.length) startStage(stageIndex + 1);
+    else openMenu();
   }
 
   // ===================== 유틸 =====================
@@ -362,7 +890,10 @@
     if (state !== 'playing') return;
     state = 'clear';
     stateTimer = 0;
-    if (bestTime === null || runTime < bestTime) bestTime = runTime;
+    const prev = save.best[stageIndex];
+    if (prev === undefined || runTime < prev) save.best[stageIndex] = runTime;
+    save.unlocked = Math.max(save.unlocked, Math.min(STAGES.length, stageIndex + 2));
+    writeSave();
     burst(level.goal.x + level.goal.w / 2, level.goal.y + 10, '#5dff8f', 60, 380);
   }
 
@@ -539,6 +1070,13 @@
   }
   function updateCamera(dt) {
     if (state === 'dead') return; // 죽은 자리에 카메라 고정
+    if (state === 'menu') {
+      // 메뉴 뒤 배경: 스테이지 전체를 천천히 훑어봄
+      const span = Math.max(1, WORLD_W - VIEW_W);
+      camera.x = (Math.sin(time * 0.08) * 0.5 + 0.5) * span;
+      camera.y = clamp(level.start.y - VIEW_H / 2, 0, WORLD_H - VIEW_H);
+      return;
+    }
     const t = cameraTarget();
     const k = 1 - Math.pow(0.0005, dt);
     camera.x += (t.x - camera.x) * k;
@@ -570,11 +1108,12 @@
   // ===================== 렌더링 =====================
   function drawBackground() {
     // 나락에서 올라오는 붉은 빛이 섞인 밤하늘
+    const skyCols = STAGES[stageIndex].sky || ['#0b0820', '#241a4e', '#4e2558', '#7a2e45'];
     const sky = ctx.createLinearGradient(0, 0, 0, VIEW_H);
-    sky.addColorStop(0, '#0b0820');
-    sky.addColorStop(0.5, '#241a4e');
-    sky.addColorStop(0.8, '#4e2558');
-    sky.addColorStop(1, '#7a2e45');
+    sky.addColorStop(0, skyCols[0]);
+    sky.addColorStop(0.5, skyCols[1]);
+    sky.addColorStop(0.8, skyCols[2]);
+    sky.addColorStop(1, skyCols[3]);
     ctx.fillStyle = sky;
     ctx.fillRect(0, 0, VIEW_W, VIEW_H);
 
@@ -962,67 +1501,29 @@
 
     // 어두운 배경에서도 잘 보이도록 은은한 주변광
     ctx.globalCompositeOperation = 'lighter';
+    const skin = curSkin();
     const aura = ctx.createRadialGradient(p.x + p.w / 2, p.y + p.h / 2, 4, p.x + p.w / 2, p.y + p.h / 2, 70);
-    aura.addColorStop(0, 'rgba(80, 160, 255, 0.25)');
-    aura.addColorStop(1, 'rgba(80, 160, 255, 0)');
+    ctx.globalAlpha = 0.25;
+    aura.addColorStop(0, skin.body);
+    aura.addColorStop(1, 'rgba(0, 0, 0, 0)');
     ctx.fillStyle = aura;
     ctx.fillRect(p.x - 60, p.y - 60, p.w + 120, p.h + 120);
     ctx.globalCompositeOperation = 'source-over';
+    ctx.globalAlpha = 1;
 
     // 잔상
     for (const t of trail) {
       ctx.globalAlpha = (t.life / 0.16) * 0.25;
-      ctx.fillStyle = '#4fa3ff';
+      ctx.fillStyle = skin.body;
       roundRect(t.x, t.y, p.w, p.h, 6);
       ctx.fill();
     }
     ctx.globalAlpha = 1;
 
-    // 그림자 느낌의 외곽
-    ctx.fillStyle = '#1b2a5c';
-    roundRect(x - 2, y - 2, w + 4, h + 4, 8);
-    ctx.fill();
-    ctx.fillStyle = '#4fa3ff';
-    roundRect(x, y, w, h, 6);
-    ctx.fill();
-    ctx.fillStyle = '#8cc6ff';
-    roundRect(x + 3, y + 3, w - 6, 8, 4);
-    ctx.fill();
-
-    // 눈
-    const eyeY = y + h * 0.35;
-    const lookX = p.facing * 3;
-    const blink = time % 3.4 < 0.12; // 가끔 눈 깜빡임
-    ctx.fillStyle = '#fff';
-    if (blink) {
-      ctx.fillRect(x + w * 0.25 + lookX - 3, eyeY + 4, 7, 2);
-      ctx.fillRect(x + w * 0.62 + lookX - 3, eyeY + 4, 7, 2);
-    } else {
-      ctx.fillRect(x + w * 0.25 + lookX - 3, eyeY, 7, 9);
-      ctx.fillRect(x + w * 0.62 + lookX - 3, eyeY, 7, 9);
-      ctx.fillStyle = '#10163a';
-      ctx.fillRect(x + w * 0.25 + lookX + p.facing * 1.5 - 1, eyeY + 2, 4, 6);
-      ctx.fillRect(x + w * 0.62 + lookX + p.facing * 1.5 - 1, eyeY + 2, 4, 6);
-    }
-    // 볼 홍조
-    ctx.fillStyle = 'rgba(255, 120, 160, 0.45)';
-    ctx.fillRect(x + w * 0.12 + lookX, eyeY + 11, 5, 3);
-    ctx.fillRect(x + w * 0.78 + lookX - 4, eyeY + 11, 5, 3);
+    drawCharacter(ctx, x, y, w, h, p.facing, time % 3.4 < 0.12, skin, save.pattern);
   }
 
-  function roundRect(x, y, w, h, r) {
-    ctx.beginPath();
-    ctx.moveTo(x + r, y);
-    ctx.lineTo(x + w - r, y);
-    ctx.quadraticCurveTo(x + w, y, x + w, y + r);
-    ctx.lineTo(x + w, y + h - r);
-    ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
-    ctx.lineTo(x + r, y + h);
-    ctx.quadraticCurveTo(x, y + h, x, y + h - r);
-    ctx.lineTo(x, y + r);
-    ctx.quadraticCurveTo(x, y, x + r, y);
-    ctx.closePath();
-  }
+  const roundRect = (x, y, w, h, r) => rr(ctx, x, y, w, h, r);
 
   function drawParticles() {
     for (const pt of particles) {
@@ -1050,10 +1551,13 @@
     ctx.fillText(`☠ ${deaths}`, 150, 38);
     ctx.font = '13px "Segoe UI", "Malgun Gothic", sans-serif';
     ctx.fillStyle = 'rgba(255,255,255,0.75)';
-    ctx.fillText(bestTime !== null ? `최고 기록 ${formatTime(bestTime)}` : '최고 기록 --:--', 24, 62);
+    const best = save.best[stageIndex];
+    ctx.fillText(`STAGE ${stageIndex + 1}  ·  최고 ${best !== undefined ? formatTime(best) : '--:--'}`, 24, 62);
 
-    // 진행도 바
-    const prog = clamp(player.x / (level.goal.x), 0, 1);
+    // 진행도 바 (시작 지점 → 도착 지점까지 남은 거리 기준, 세로 스테이지에서도 동작)
+    const gx = level.goal.x + level.goal.w / 2, gy = level.goal.y + level.goal.h / 2;
+    const total = Math.hypot(gx - level.start.x, gy - level.start.y);
+    const prog = clamp(1 - Math.hypot(gx - player.x, gy - player.y) / total, 0, 1);
     ctx.fillStyle = 'rgba(0,0,0,0.35)';
     roundRect(VIEW_W - 232, 16, 216, 14, 7);
     ctx.fill();
@@ -1079,16 +1583,18 @@
       ctx.textAlign = 'center';
       ctx.font = '16px "Segoe UI", "Malgun Gothic", sans-serif';
       ctx.fillStyle = 'rgba(0,0,0,0.45)';
-      roundRect(VIEW_W / 2 - 250, VIEW_H - 58, 500, 36, 8);
+      roundRect(VIEW_W / 2 - 290, VIEW_H - 58, 580, 36, 8);
       ctx.fill();
       ctx.fillStyle = '#fff';
-      ctx.fillText('← → / A D : 이동    Space / ↑ / W : 점프    R : 처음부터', VIEW_W / 2, VIEW_H - 34);
+      ctx.fillText(isTouch
+        ? '◀ ▶ : 이동    점프 : 길게 누르면 높이    ↺ : 다시    ☰ : 메뉴'
+        : '← → / A D : 이동    Space / ↑ / W : 점프    R : 다시    Esc : 메뉴', VIEW_W / 2, VIEW_H - 34);
       ctx.globalAlpha = 1;
     }
   }
 
   function drawOverlay() {
-    if (state === 'playing') return;
+    if (state === 'playing' || state === 'menu') return;
     const a = Math.min(1, stateTimer / 0.4);
     ctx.fillStyle = `rgba(5, 6, 15, ${0.6 * a})`;
     ctx.fillRect(0, 0, VIEW_W, VIEW_H);
@@ -1105,9 +1611,10 @@
     } else {
       ctx.font = 'bold 72px "Segoe UI", sans-serif';
       ctx.fillStyle = '#146b35';
-      ctx.fillText('STAGE CLEAR!', VIEW_W / 2 + 4, VIEW_H / 2 - 30 + 4 + bounce);
+      const title = stageIndex + 1 < STAGES.length ? 'STAGE CLEAR!' : 'ALL CLEAR!';
+      ctx.fillText(title, VIEW_W / 2 + 4, VIEW_H / 2 - 30 + 4 + bounce);
       ctx.fillStyle = '#5dff8f';
-      ctx.fillText('STAGE CLEAR!', VIEW_W / 2, VIEW_H / 2 - 30 + bounce);
+      ctx.fillText(title, VIEW_W / 2, VIEW_H / 2 - 30 + bounce);
       ctx.font = '22px "Segoe UI", "Malgun Gothic", sans-serif';
       ctx.fillStyle = '#fff';
       ctx.fillText(`기록 ${formatTime(runTime)}   ·   사망 ${deaths}회`, VIEW_W / 2, VIEW_H / 2 + 14);
@@ -1115,8 +1622,15 @@
 
     ctx.font = '20px "Segoe UI", "Malgun Gothic", sans-serif';
     ctx.fillStyle = `rgba(255,255,255,${0.55 + 0.45 * Math.sin(time * 4)})`;
-    let msg = 'Enter 키를 눌러 다시 시작';
-    if (state === 'dead' && currentCp) msg = 'Enter: 체크포인트에서 다시 시작   ·   R: 처음부터';
+    let msg;
+    if (state === 'dead') {
+      const where = currentCp ? '체크포인트에서' : '처음부터';
+      msg = isTouch ? `터치: ${where} 다시 시작   ·   ↺: 처음부터` : `Enter: ${where} 다시 시작   ·   R: 처음부터`;
+    } else if (stageIndex + 1 < STAGES.length) {
+      msg = isTouch ? '터치: 다음 스테이지   ·   ☰: 메뉴' : 'Enter: 다음 스테이지   ·   Esc: 메뉴';
+    } else {
+      msg = isTouch ? '모든 스테이지 클리어! 터치해서 메뉴로' : '모든 스테이지 클리어!   Enter: 메뉴로';
+    }
     ctx.fillText(msg, VIEW_W / 2, VIEW_H / 2 + 60);
     ctx.globalAlpha = 1;
   }
@@ -1149,8 +1663,96 @@
       ctx.fillStyle = `rgba(255,255,255,${(flashTimer / 0.35) * 0.6})`;
       ctx.fillRect(0, 0, VIEW_W, VIEW_H);
     }
-    drawHUD();
+    if (state !== 'menu') drawHUD();
     drawOverlay();
+    if (state === 'menu') drawPreview();
+  }
+
+  // ===================== 메인 메뉴 =====================
+  const menuEl = document.getElementById('menu');
+  const previewEl = document.getElementById('preview');
+  const previewCtx = previewEl.getContext('2d');
+  const swatchesEl = document.getElementById('swatches');
+  const patternsEl = document.getElementById('patterns');
+  const stageListEl = document.getElementById('stageList');
+
+  SKINS.forEach((sk, i) => {
+    const b = document.createElement('button');
+    b.className = 'swatch';
+    b.style.background = sk.body;
+    b.title = sk.name;
+    b.setAttribute('aria-label', sk.name);
+    b.addEventListener('click', () => { save.skin = i; writeSave(); refreshMenu(); });
+    swatchesEl.appendChild(b);
+  });
+  PATTERNS.forEach(pt => {
+    const b = document.createElement('button');
+    b.className = 'pat';
+    b.dataset.id = pt.id;
+    b.innerHTML = `<canvas width="68" height="68"></canvas><span>${pt.name}</span>`;
+    b.addEventListener('click', () => { save.pattern = pt.id; writeSave(); refreshMenu(); });
+    patternsEl.appendChild(b);
+  });
+
+  function refreshMenu() {
+    [...swatchesEl.children].forEach((b, i) => b.classList.toggle('sel', i === save.skin));
+    for (const b of patternsEl.children) {
+      b.classList.toggle('sel', b.dataset.id === save.pattern);
+      const c = b.querySelector('canvas').getContext('2d');
+      c.setTransform(1, 0, 0, 1, 0, 0);
+      c.clearRect(0, 0, 68, 68);
+      c.setTransform(1.4, 0, 0, 1.4, 0, 0);
+      drawCharacter(c, 10.3, 5, 28, 36, 1, false, curSkin(), b.dataset.id);
+    }
+    stageListEl.innerHTML = '';
+    STAGES.forEach((st, i) => {
+      const locked = i >= save.unlocked;
+      const best = save.best[i];
+      const b = document.createElement('button');
+      b.className = 'stage';
+      b.disabled = locked;
+      b.innerHTML = `<span class="num">${locked ? '🔒' : i + 1}</span>`
+        + `<span class="name">${st.name}</span>`
+        + `<span class="best">${locked ? '이전 스테이지를 깨면 열려요' : best !== undefined ? '최고 ' + formatTime(best) : '도전 전'}</span>`;
+      b.addEventListener('click', () => startStage(i));
+      stageListEl.appendChild(b);
+    });
+    document.getElementById('menuHint').textContent = isTouch
+      ? '스테이지를 눌러서 시작'
+      : '스테이지를 클릭하거나 Enter로 시작  ·  게임 중 Esc로 메뉴';
+  }
+
+  // 미리보기 캐릭터: 좌우를 번갈아 보고 가끔 깜빡이며 통통 튐
+  function drawPreview() {
+    const dpr = window.devicePixelRatio || 1;
+    const size = Math.round(96 * dpr);
+    if (previewEl.width !== size) { previewEl.width = size; previewEl.height = size; }
+    const c = previewCtx;
+    c.setTransform(1, 0, 0, 1, 0, 0);
+    c.clearRect(0, 0, size, size);
+    const k = (96 / 48) * dpr;
+    c.setTransform(k, 0, 0, k, 0, 0);
+    const hop = Math.abs(Math.sin(time * 3)) * 4;
+    c.fillStyle = 'rgba(0, 0, 0, 0.3)';
+    c.beginPath();
+    c.ellipse(24, 44, 13 - hop, 2.5, 0, 0, Math.PI * 2);
+    c.fill();
+    const facing = Math.sin(time * 0.9) > 0 ? 1 : -1;
+    drawCharacter(c, 10, 6 - hop, 28, 36, facing, time % 3.4 < 0.12, curSkin(), save.pattern);
+  }
+
+  function openMenu() {
+    state = 'menu';
+    keys.clear();
+    for (const id of [...fingers.keys()]) setFinger(id, null);
+    document.body.classList.add('menu-open');
+    menuEl.hidden = false;
+    refreshMenu();
+  }
+
+  function closeMenu() {
+    menuEl.hidden = true;
+    document.body.classList.remove('menu-open');
   }
 
   // ===================== 메인 루프 =====================
@@ -1168,8 +1770,9 @@
     requestAnimationFrame(loop);
   }
 
-  updateMovers();
-  resetGame();
+  stageIndex = clamp(Math.min(save.last | 0, (save.unlocked | 0) - 1), 0, STAGES.length - 1);
+  resetGame();          // 메뉴 뒤에 보일 스테이지를 미리 불러옴
+  openMenu();
   requestAnimationFrame(loop);
 })();
 </script>
