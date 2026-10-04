@@ -1,6 +1,6 @@
 // 오프라인 플레이용 서비스 워커
 // 게임 파일을 바꾼 뒤에는 CACHE 이름의 버전을 올려야 예전 캐시가 정리됨
-const CACHE = 'jumpmap-v2';
+const CACHE = 'jumpmap-v3';
 const FILES = [
   './',
   './index.html',
